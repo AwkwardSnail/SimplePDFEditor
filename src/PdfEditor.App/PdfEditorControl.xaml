@@ -78,12 +78,19 @@
 
         <Grid>
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="150" />
+                <ColumnDefinition Width="150" MinWidth="90" MaxWidth="600" />
+                <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="250" />
             </Grid.ColumnDefinitions>
 
-            <ListBox x:Name="Thumbs" Grid.Column="0" SelectionChanged="Thumbs_SelectionChanged"
+            <GridSplitter Grid.Column="1" Width="5" HorizontalAlignment="Center" VerticalAlignment="Stretch" ResizeBehavior="PreviousAndNext"
+                          Background="#FFD0D0D0" ToolTip="Drag to resize the page list" />
+
+            <ListBox x:Name="Thumbs" Grid.Column="0" SelectionChanged="Thumbs_SelectionChanged" AllowDrop="True"
+                     PreviewMouseLeftButtonDown="Thumbs_PreviewMouseLeftButtonDown" PreviewMouseMove="Thumbs_PreviewMouseMove"
+                     DragOver="Thumbs_DragOver" Drop="Thumbs_Drop" SizeChanged="Thumbs_SizeChanged"
+                     ToolTip="Drag a page to change its place"
                      ScrollViewer.HorizontalScrollBarVisibility="Disabled" HorizontalContentAlignment="Center">
                 <ListBox.ItemTemplate>
                     <DataTemplate>
@@ -97,7 +104,7 @@
                 </ListBox.ItemTemplate>
             </ListBox>
 
-            <ScrollViewer x:Name="PageScroll" Grid.Column="1" Background="#FF6B6F76"
+            <ScrollViewer x:Name="PageScroll" Grid.Column="2" Background="#FF6B6F76"
                           HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"
                           PreviewMouseWheel="PageScroll_PreviewMouseWheel">
                 <Border Margin="24" HorizontalAlignment="Center" VerticalAlignment="Top" Background="White"
@@ -110,7 +117,7 @@
                 </Border>
             </ScrollViewer>
 
-            <DockPanel Grid.Column="2">
+            <DockPanel Grid.Column="3">
                 <TextBlock DockPanel.Dock="Top" Text="Comments and highlights on this page" FontWeight="SemiBold" Margin="8,6" TextWrapping="Wrap" />
                 <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="8,6">
                     <Button x:Name="EditNoteButton" Content="Edit text" Padding="8,2" Margin="0,0,6,0" Click="EditNote_Click" />

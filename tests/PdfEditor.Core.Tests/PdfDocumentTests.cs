@@ -374,6 +374,53 @@ public class PdfDocumentTests
         Assert.True(red.R > 200 && red.G < 60 && red.B < 60, $"expected red text, got {red}");
     }
 
+    /// <summary>A page whose text is drawn directly, plus a group (form XObject) holding a blue box and its own text.</summary>
+    private static byte[] PdfWithGroup()
+    {
+        const string page = "BT /F1 20 Tf 100 700 Td (Page text) Tj ET /Fm1 Do";
+        const string group = "0 0 1 rg 100 500 80 40 re f BT /F1 16 Tf 100 600 Td (Group text) Tj ET";
+        string pdf = "%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n" +
+                     "3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>/XObject<</Fm1 6 0 R>>>>>>endobj\n" +
+                     $"4 0 obj<</Length {page.Length}>>stream\n{page}\nendstream endobj\n" +
+                     "5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj\n" +
+                     $"6 0 obj<</Type/XObject/Subtype/Form/BBox[0 0 612 792]/Resources<</Font<</F1 5 0 R>>>>/Length {group.Length}>>stream\n{group}\nendstream endobj\n" +
+                     "trailer<</Root 1 0 R>>\n%%EOF";
+        return System.Text.Encoding.ASCII.GetBytes(pdf);
+    }
+
+    [Fact]
+    public void Groups_can_be_taken_apart_into_editable_items()
+    {
+        using var doc = PdfDocument.Open(PdfWithGroup());
+        var group = doc.GetGroups(0).Single();
+        Assert.Equal(2, group.ItemCount);
+        Assert.True(doc.GroupItemAt(0, group.ObjectIndex, 140, 792 - 520));   // on the blue box
+        Assert.False(doc.GroupItemAt(0, group.ObjectIndex, 400, 100));        // inside the group's bounds, but on nothing
+        Assert.Equal(111.6, doc.GetDrawings(0).Single().Bounds.Height, 0);     // before: the whole group moves as one drawing (box and text)
+        var before = doc.Render(0);
+
+        Assert.True(doc.Ungroup(0, group.ObjectIndex, out var problem), problem);
+        using var saved = Reopen(doc);
+        Assert.Empty(saved.GetGroups(0));
+        var box = saved.GetDrawings(0).Single();
+        Assert.Equal(new PdfRect(100, 792 - 540, 80, 40), Round(box.Bounds));
+        Assert.Contains("Group text", saved.GetPageText(0));                   // a standard font: stays real text
+        Assert.Contains("Page text", saved.GetPageText(0));
+        Assert.Equal(2, saved.GetTextRuns(0).Count);
+
+        // Nothing moved or changed colour.
+        var after = saved.Render(0);
+        int changed = 0;
+        for (int i = 0; i < before.Pixels.Length; i += 4)
+            if (Math.Abs(before.Pixels[i] - after.Pixels[i]) + Math.Abs(before.Pixels[i + 1] - after.Pixels[i + 1]) + Math.Abs(before.Pixels[i + 2] - after.Pixels[i + 2]) > 60) changed++;
+        Assert.True(changed < 20, $"{changed} pixels changed");
+
+        // And the parts are ordinary items now.
+        saved.MoveObjects(0, box.ObjectIndices, 50, 0);
+        Assert.Equal(150, Math.Round(saved.GetDrawings(0).Single().Bounds.X));
+        Assert.Throws<ArgumentException>(() => saved.Ungroup(0, 0));           // nothing here is a group any more
+    }
+
     [Fact]
     public void Bad_input_gives_clear_errors()
     {

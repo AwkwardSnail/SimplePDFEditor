@@ -299,7 +299,7 @@ public partial class PdfEditorControl : UserControl
         height = 140;
         if (pageIndex >= Doc.PageCount) return null;
         var size = Doc.GetPageSize(pageIndex);
-        double fit = Math.Min(110 / size.Width, 150 / size.Height);
+        double fit = Math.Min(_thumbWidth / size.Width, _thumbWidth * 1.45 / size.Height);
         width = size.Width * fit;
         height = size.Height * fit;
         double dpi = VisualTreeHelper.GetDpi(this).PixelsPerDip;
@@ -412,14 +412,19 @@ public partial class PdfEditorControl : UserControl
         GoToPage(Thumbs.SelectedIndex);
     }
 
-    private void GoToPage(int page)
+    private void GoToPage(int page, bool showBottom = false)
     {
         if (page < 0 || page >= Doc.PageCount || page == _page) return;
         CommitEditor();
         _page = page;
         _selection = null;
         RefreshAll();
-        PageScroll.ScrollToTop();
+        if (showBottom)
+        {
+            PageScroll.UpdateLayout(); // the new page's height must be known before scrolling to its end
+            PageScroll.ScrollToBottom();
+        }
+        else PageScroll.ScrollToTop();
     }
 
     private void ZoomOut_Click(object sender, RoutedEventArgs e) => SetZoom(ZoomSteps.LastOrDefault(z => z < _zoom - 0.001, ZoomSteps[0]));
@@ -440,9 +445,23 @@ public partial class PdfEditorControl : UserControl
 
     private void PageScroll_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
     {
-        if (Keyboard.Modifiers != ModifierKeys.Control) return;
-        SetZoom(_zoom * (e.Delta > 0 ? 1.1 : 1 / 1.1));
-        e.Handled = true;
+        if (Keyboard.Modifiers == ModifierKeys.Control)
+        {
+            SetZoom(_zoom * (e.Delta > 0 ? 1.1 : 1 / 1.1));
+            e.Handled = true;
+            return;
+        }
+        // Scrolling past the end of a page carries on to the next page (and past the top, to the one before).
+        if (e.Delta < 0 && PageScroll.VerticalOffset >= PageScroll.ScrollableHeight - 0.5 && _page < Doc.PageCount - 1)
+        {
+            GoToPage(_page + 1);
+            e.Handled = true;
+        }
+        else if (e.Delta > 0 && PageScroll.VerticalOffset <= 0.5 && _page > 0)
+        {
+            GoToPage(_page - 1, showBottom: true);
+            e.Handled = true;
+        }
     }
 
     // ------------------------------------------------------------------ tools
@@ -558,7 +577,7 @@ public partial class PdfEditorControl : UserControl
             }
         }
 
-        var hit = HitTest(p);
+        var hit = HitTest(p) ?? UngroupAt(p);
         Select(hit);
         if (hit is null) return;
 
@@ -957,6 +976,114 @@ public partial class PdfEditorControl : UserControl
         else if (e.Key == Key.PageUp) GoToPage(_page - 1);
         else return;
         e.Handled = true;
+    }
+
+    // ------------------------------------------------------------------ groups
+
+    /// <summary>
+    /// When a click lands on nothing selectable but inside a group (a header or logo block the
+    /// PDF stores as one unit), takes the group apart so its parts can be selected, then
+    /// returns what is now under the point. One undo step puts the group back.
+    /// </summary>
+    private Selection? UngroupAt(Point p)
+    {
+        GroupInfo? group;
+        try
+        {
+            // Only when the click is on one of the group's items, not just inside its (often page-wide) bounds.
+            group = Doc.GetGroups(_page).Where(g => g.Bounds.Contains(p.X, p.Y) && Doc.GroupItemAt(_page, g.ObjectIndex, p.X, p.Y))
+                       .OrderBy(g => g.Bounds.Width * g.Bounds.Height).FirstOrDefault();
+        }
+        catch (Exception) { return null; }
+        if (group is null) return null;
+        int page = _page;
+        try
+        {
+            _session.Apply(d =>
+            {
+                if (!d.Ungroup(page, group.ObjectIndex, out var problem)) throw new InvalidOperationException(problem);
+            });
+        }
+        catch (Exception e)
+        {
+            RefreshAll();
+            ShowStatus($"This part of the page is a group that cannot be taken apart ({e.Message}).");
+            return null;
+        }
+        ShowStatus("A group was taken apart so its parts can be selected and moved. Text that could not stay as text became shapes. Undo puts the group back.");
+        return HitTest(p);
+    }
+
+    // ------------------------------------------------------------------ page list: resizing and reordering
+
+    private double _thumbWidth = 110;
+    private System.Windows.Threading.DispatcherTimer? _thumbResize;
+    private Point? _thumbDragStart;
+    private int _thumbDragIndex = -1;
+    private const string PageDragFormat = "PdfEditor.PageIndex";
+
+    private void Thumbs_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        double width = Math.Max(60, Thumbs.ActualWidth - 44); // room for the scroll bar and margins
+        if (Math.Abs(width - _thumbWidth) < 4) return;
+        _thumbWidth = width;
+        // Redraw once the dragging settles, not for every pixel.
+        _thumbResize ??= new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
+        _thumbResize.Stop();
+        _thumbResize.Tick -= ThumbResize_Tick;
+        _thumbResize.Tick += ThumbResize_Tick;
+        _thumbResize.Start();
+    }
+
+    private void ThumbResize_Tick(object? sender, EventArgs e)
+    {
+        _thumbResize?.Stop();
+        foreach (var item in _pages) item.Invalidate();
+    }
+
+    private int ThumbIndexAt(object? source)
+    {
+        if (source is not DependencyObject element) return -1;
+        var container = ItemsControl.ContainerFromElement(Thumbs, element) as ListBoxItem;
+        return container is null ? -1 : Thumbs.ItemContainerGenerator.IndexFromContainer(container);
+    }
+
+    private void Thumbs_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        _thumbDragIndex = ThumbIndexAt(e.OriginalSource);
+        _thumbDragStart = _thumbDragIndex >= 0 ? e.GetPosition(Thumbs) : null;
+    }
+
+    private void Thumbs_PreviewMouseMove(object sender, MouseEventArgs e)
+    {
+        if (_thumbDragStart is not { } start || e.LeftButton != MouseButtonState.Pressed) { _thumbDragStart = null; return; }
+        var now = e.GetPosition(Thumbs);
+        if (Math.Abs(now.X - start.X) < SystemParameters.MinimumHorizontalDragDistance && Math.Abs(now.Y - start.Y) < SystemParameters.MinimumVerticalDragDistance) return;
+        int index = _thumbDragIndex;
+        _thumbDragStart = null;
+        DragDrop.DoDragDrop(Thumbs, new DataObject(PageDragFormat, index), DragDropEffects.Move);
+    }
+
+    private void Thumbs_DragOver(object sender, DragEventArgs e)
+    {
+        if (!e.Data.GetDataPresent(PageDragFormat)) return; // a file being dropped: the editor handles it
+        e.Effects = DragDropEffects.Move;
+        e.Handled = true;
+    }
+
+    private void Thumbs_Drop(object sender, DragEventArgs e)
+    {
+        if (e.Data.GetData(PageDragFormat) is not int from) return;
+        e.Handled = true;
+        int to = ThumbIndexAt(e.OriginalSource);
+        if (to < 0) to = Doc.PageCount - 1; // dropped below the last page
+        if (from < 0 || from >= Doc.PageCount || to == from) return;
+        CommitEditor();
+        _selection = null;
+        int previous = _page;
+        _page = to;
+        if (!Edit(d => d.MovePage(from, to))) { _page = previous; RefreshAll(); }
+        else ShowStatus($"Page {from + 1} moved to position {to + 1}.");
     }
 
     private void OnDrop(object sender, DragEventArgs e)

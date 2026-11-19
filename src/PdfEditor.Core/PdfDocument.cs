@@ -222,6 +222,8 @@ public sealed unsafe partial class PdfDocument : IDisposable
         /// rewrites the page's original content, so other text needs protecting (see PreserveTextLayout).
         /// </summary>
         public bool ChangedExisting { get; set; }
+        /// <summary>Objects created while this page was open. They are already written exactly as wanted, so the protection step leaves them alone.</summary>
+        public HashSet<IntPtr> NewObjects { get; } = [];
         private readonly PdfDocument _owner;
 
         public PageHandle(IntPtr handle, PdfDocument owner)

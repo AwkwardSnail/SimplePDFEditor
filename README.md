@@ -91,6 +91,10 @@ or open `PdfEditor.sln` in Visual Studio and run `PdfEditor.App`. A PDF path on 
 | **Comment** | Click where the comment should go and type it. Comments and highlights are listed on the right. |
 | **Image** | Pick an image file; it is placed in the middle of the page, ready to drag and resize. |
 
+Vector drawings (shapes that sit together) are selected, moved and deleted as one item. A click on something inside a group (a header or logo block stored as one unit) takes the group apart so its parts can be selected; where the group's text cannot safely stay text, it becomes shapes that look the same.
+
+Scrolling past the end of a page carries on to the next page. The page list on the left can be resized by dragging its edge, and pages reordered by dragging them.
+
 **Find & replace** (Ctrl+H) replaces text throughout the document and re-flows each paragraph it changes.
 
 **Open** also accepts RTF files: the document is laid out as a new PDF (named after the RTF file, not saved until you save it). **Insert file** adds the pages of a PDF or an RTF document after the current page. Anything that could not be imported is listed after the import.
