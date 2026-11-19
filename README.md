@@ -12,6 +12,8 @@ A PDF editor in C# for The Awkward Snail.
 
 A PDF has no paragraphs, only characters placed at positions. `PdfEditor.Core` works the paragraphs out from where the characters sit, and can rewrite one so that its words wrap again, the way a word processor would.
 
+![A Word-style page before and after five paragraph edits](docs/reflow-before-after.png)
+
 ```csharp
 using var doc = PdfDocument.Open("in.pdf");
 
