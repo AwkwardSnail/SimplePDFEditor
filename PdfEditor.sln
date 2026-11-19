@@ -11,6 +11,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{E13EDA54
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PdfEditor.Core.Tests", "tests\PdfEditor.Core.Tests\PdfEditor.Core.Tests.csproj", "{5D1BE1F8-0F89-415F-8CB3-1ED4E79D4B60}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PdfEditor.App", "src\PdfEditor.App\PdfEditor.App.csproj", "{C2D3B3F2-F9C9-49C3-A97F-26CDBB45FE06}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -28,9 +30,14 @@ Global
 		{5D1BE1F8-0F89-415F-8CB3-1ED4E79D4B60}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{5D1BE1F8-0F89-415F-8CB3-1ED4E79D4B60}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{5D1BE1F8-0F89-415F-8CB3-1ED4E79D4B60}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C2D3B3F2-F9C9-49C3-A97F-26CDBB45FE06}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C2D3B3F2-F9C9-49C3-A97F-26CDBB45FE06}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C2D3B3F2-F9C9-49C3-A97F-26CDBB45FE06}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C2D3B3F2-F9C9-49C3-A97F-26CDBB45FE06}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{305A3591-6EFD-4C15-9FBA-B25677339873} = {A488FC40-9BF1-478E-AF89-54FA3397246B}
 		{5D1BE1F8-0F89-415F-8CB3-1ED4E79D4B60} = {E13EDA54-40B9-40E5-A92E-7012E4FE30D3}
+		{C2D3B3F2-F9C9-49C3-A97F-26CDBB45FE06} = {A488FC40-9BF1-478E-AF89-54FA3397246B}
 	EndGlobalSection
 EndGlobal

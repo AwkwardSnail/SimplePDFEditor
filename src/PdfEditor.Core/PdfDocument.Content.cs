@@ -363,6 +363,17 @@ public sealed unsafe partial class PdfDocument
         page.Dirty = true;
     }
 
+    /// <summary>Moves and resizes an existing image to fill the given rectangle.</summary>
+    public void SetImageBounds(int pageIndex, int objectIndex, PdfRect bounds)
+    {
+        if (bounds.Width <= 0 || bounds.Height <= 0) throw new ArgumentOutOfRangeException(nameof(bounds), "Image size must be positive.");
+        using var page = OpenPage(pageIndex);
+        var obj = GetObject(page, objectIndex, Native.PAGEOBJ_IMAGE, "image");
+        var m = Affine.Concat(new Affine(bounds.Width, 0, 0, -bounds.Height, bounds.X, bounds.Bottom), page.ViewToUser).ToNative();
+        Native.FPDFPageObj_SetMatrix(obj, &m);
+        page.Dirty = true;
+    }
+
     public IReadOnlyList<ImageInfo> GetImages(int pageIndex)
     {
         using var page = OpenPage(pageIndex);

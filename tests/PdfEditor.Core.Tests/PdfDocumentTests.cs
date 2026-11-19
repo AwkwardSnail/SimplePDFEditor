@@ -264,6 +264,66 @@ public class PdfDocumentTests
     }
 
     [Fact]
+    public void Images_can_be_resized()
+    {
+        using var doc = PdfDocument.Create();
+        doc.AddPage();
+        doc.AddImage(0, Png, 100, 150, width: 80);
+        doc.SetImageBounds(0, doc.GetImages(0)[0].ObjectIndex, new PdfRect(20, 30, 200, 100));
+        using var saved = Reopen(doc);
+        Assert.Equal(new PdfRect(20, 30, 200, 100), Round(saved.GetImages(0).Single().Bounds));
+    }
+
+    [Fact]
+    public void Session_tracks_changes_and_supports_undo_and_redo()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"pdfeditor-test-{Guid.NewGuid():N}.pdf");
+        try
+        {
+            using var session = EditorSession.New();
+            int changes = 0;
+            session.Changed += (_, _) => changes++;
+            Assert.False(session.IsModified);
+            Assert.False(session.CanUndo);
+
+            session.Apply(d => d.AddText(0, 50, 50, "First"));
+            session.Apply(d => d.AddPage());
+            Assert.True(session.IsModified);
+            Assert.Equal(2, session.Document.PageCount);
+
+            session.Undo();
+            Assert.Equal(1, session.Document.PageCount);
+            Assert.Contains("First", session.Document.GetPageText(0));
+            session.Undo();
+            Assert.DoesNotContain("First", session.Document.GetPageText(0));
+            Assert.False(session.CanUndo);
+            session.Redo();
+            session.Redo();
+            Assert.Equal(2, session.Document.PageCount);
+            Assert.False(session.CanRedo);
+
+            // A failed edit leaves the document untouched and adds no undo step.
+            session.Undo();
+            Assert.Throws<ArgumentOutOfRangeException>(() => session.Apply(d => { d.AddPage(); d.DeletePage(99); }));
+            Assert.Equal(1, session.Document.PageCount);
+            Assert.True(session.CanRedo);
+
+            session.Apply(d => d.AddComment(0, 10, 10, "note"));
+            Assert.False(session.CanRedo);
+            Assert.Throws<InvalidOperationException>(() => session.Save());
+            session.Save(path);
+            Assert.False(session.IsModified);
+            Assert.Equal(path, session.FilePath);
+            Assert.Equal(9, changes);
+
+            using var reopened = EditorSession.Open(path);
+            Assert.Contains("First", reopened.Document.GetPageText(0));
+            Assert.Single(reopened.Document.GetAnnotations(0));
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
     public void Bad_input_gives_clear_errors()
     {
         Assert.Throws<PdfException>(() => PdfDocument.Open(new byte[] { 1, 2, 3, 4 }));
