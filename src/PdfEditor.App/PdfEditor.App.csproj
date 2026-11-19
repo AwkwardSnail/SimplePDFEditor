@@ -7,7 +7,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>PdfEditor.App</RootNamespace>
-    <AssemblyName>PdfEditor</AssemblyName>
+    <AssemblyName>SimplePDFEditor</AssemblyName>
     <!-- The aWkward sn@ail icon, made by packaging\generate-icons.ps1. -->
     <ApplicationIcon>app.ico</ApplicationIcon>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>

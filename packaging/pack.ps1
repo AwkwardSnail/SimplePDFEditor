@@ -1,10 +1,10 @@
-# Builds the MSIX package for the PDF editor (Windows).
+# Builds the MSIX package for SimplePDF Editor (Windows).
 #
 #   .\packaging\pack.ps1                     unsigned .msix for Store upload (the Store signs it)
 #   .\packaging\pack.ps1 -Version 1.0.1.0    bump the package version (the last part must stay 0 for the Store)
 #   .\packaging\pack.ps1 -Install            also install it on this PC for testing (needs Developer Mode)
 #
-# -Install copies the package layout to %USERPROFILE%\apps\PdfEditor-dev and
+# -Install copies the package layout to %USERPROFILE%\apps\SimplePDFEditor-dev and
 # registers it from there, so it shows in the Start menu and is offered for .pdf
 # and .rtf files, and rebuilding the project doesn't disturb it. Remove it from
 # Settings > Apps, or with: Get-AppxPackage AkwardSnail.SimplePDFEditor | Remove-AppxPackage
@@ -22,7 +22,7 @@ $root = Split-Path -Parent $PSScriptRoot
 $out = Join-Path $PSScriptRoot 'out'
 $stage = Join-Path $out 'stage'
 $priRoot = Join-Path $out 'pri'
-$msix = Join-Path $out "PdfEditor_${Version}_x64.msix"
+$msix = Join-Path $out "SimplePDFEditor_${Version}_x64.msix"
 
 if ($Version -notmatch '^\d+\.\d+\.\d+\.0$') { throw 'Version must look like 1.2.3.0 (the Store needs the last part to be 0).' }
 
@@ -64,7 +64,7 @@ Invoke-Tool makeappx.exe pack /d $stage /p $msix /o
 
 if ($Install) {
     $name = ([xml]$manifest).Package.Identity.Name
-    $dev = Join-Path $env:USERPROFILE 'apps\PdfEditor-dev'
+    $dev = Join-Path $env:USERPROFILE 'apps\SimplePDFEditor-dev'
     # Replace any earlier test install (and the folder it runs from).
     Get-AppxPackage -Name $name | Remove-AppxPackage
     Remove-Item $dev -Recurse -Force -ErrorAction SilentlyContinue

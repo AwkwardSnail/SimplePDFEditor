@@ -35,7 +35,7 @@
   </Resources>
 
   <Applications>
-    <Application Id="PdfEditor" Executable="PdfEditor.exe" EntryPoint="Windows.FullTrustApplication">
+    <Application Id="SimplePDFEditor" Executable="SimplePDFEditor.exe" EntryPoint="Windows.FullTrustApplication">
       <uap:VisualElements
         DisplayName="SimplePDF Editor"
         Description="Edit PDFs: text, pages, pictures, highlights and comments."
