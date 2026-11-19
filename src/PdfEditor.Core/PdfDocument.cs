@@ -36,6 +36,8 @@ public sealed unsafe partial class PdfDocument : IDisposable
 
     public static PdfDocument Open(byte[] data, string? password = null)
     {
+        // Embedded fonts that share a name get names of their own first: PDFium would mix them up.
+        data = Preflight.DistinctFontNames.Apply(data);
         var pin = GCHandle.Alloc(data, GCHandleType.Pinned);
         var doc = Native.FPDF_LoadMemDocument((void*)pin.AddrOfPinnedObject(), data.Length, password);
         if (doc == IntPtr.Zero)

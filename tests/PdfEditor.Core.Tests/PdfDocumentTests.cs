@@ -666,6 +666,69 @@ public class PdfDocumentTests
         Assert.Contains("Group text", saved.GetPageText(0));
     }
 
+    /// <summary>
+    /// A PDF with a proper cross-reference table and two fonts, F1 and F2, each drawing one word.
+    /// Both fonts carry (dummy) font data of their own unless told otherwise.
+    /// </summary>
+    internal static byte[] PdfWithTwoFonts(string firstName, string secondName, bool firstEmbedded = true)
+    {
+        const string content = "BT /F1 20 Tf 72 700 Td (Hello) Tj ET BT /F2 20 Tf 72 650 Td (World) Tj ET";
+        var objects = new List<string>
+        {
+            "<</Type/Catalog/Pages 2 0 R>>",
+            "<</Type/Pages/Kids[3 0 R]/Count 1>>",
+            "<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Contents 4 0 R/Resources<</Font<</F1 5 0 R/F2 6 0 R>>>>>>",
+            $"<</Length {content.Length}>>stream\n{content}\nendstream",
+            $"<</Type/Font/Subtype/TrueType/BaseFont/{firstName}/Encoding/WinAnsiEncoding{(firstEmbedded ? "/FontDescriptor 7 0 R" : "")}>>",
+            $"<</Type/Font/Subtype/TrueType/BaseFont/{secondName}/Encoding/WinAnsiEncoding/FontDescriptor 8 0 R>>",
+            $"<</Type/FontDescriptor/FontName/{firstName}/Flags 32/FontBBox[0 0 1000 1000]/ItalicAngle 0/Ascent 800/Descent -200/CapHeight 700/StemV 80/FontFile2 9 0 R>>",
+            $"<</Type/FontDescriptor/FontName/{secondName}/Flags 32/FontBBox[0 0 1000 1000]/ItalicAngle 0/Ascent 800/Descent -200/CapHeight 700/StemV 80/FontFile2 10 0 R>>",
+            "<</Length 5>>stream\nfont1\nendstream",
+            "<</Length 5>>stream\nfont2\nendstream",
+        };
+        var pdf = new System.Text.StringBuilder("%PDF-1.4\n");
+        var offsets = new List<int>();
+        for (int i = 0; i < objects.Count; i++)
+        {
+            offsets.Add(pdf.Length);
+            pdf.Append($"{i + 1} 0 obj\n{objects[i]}\nendobj\n");
+        }
+        int xref = pdf.Length;
+        pdf.Append($"xref\n0 {objects.Count + 1}\n0000000000 65535 f \n");
+        foreach (int offset in offsets) pdf.Append($"{offset:D10} 00000 n \n");
+        pdf.Append($"trailer\n<</Size {objects.Count + 1}/Root 1 0 R>>\nstartxref\n{xref}\n%%EOF\n");
+        return System.Text.Encoding.ASCII.GetBytes(pdf.ToString());
+    }
+
+    /// <summary>The fonts of the two words, top first, without the six-letter prefix of a partial font.</summary>
+    internal static string[] FontNames(byte[] pdf)
+    {
+        using var doc = PdfDocument.Open(pdf);
+        return doc.GetTextRuns(0).OrderBy(r => r.Bounds.Y).Select(r => r.FontName.Length > 7 && r.FontName[6] == '+' ? r.FontName[7..] : r.FontName).ToArray();
+    }
+
+    [Fact]
+    public void Embedded_fonts_that_share_a_name_are_given_their_own_names_on_opening()
+    {
+        // Two cuts of one font, told apart only by the prefix that PDFium drops.
+        Assert.Equal(["Helvetica", "Helvetica-2"], FontNames(PdfWithTwoFonts("AAAAAB+Helvetica", "AAAAAF+Helvetica")));
+        // A font the file does not carry is drawn by name, so it keeps the name and the embedded one changes.
+        Assert.Equal(["Helvetica", "Helvetica-2"], FontNames(PdfWithTwoFonts("Helvetica", "AAAAAF+Helvetica", firstEmbedded: false)));
+    }
+
+    [Fact]
+    public void A_file_without_clashing_fonts_is_opened_as_it_is()
+    {
+        byte[] pdf = PdfWithTwoFonts("AAAAAB+Helvetica", "AAAAAF+Arial");
+        Assert.Same(pdf, PdfEditor.Core.Preflight.DistinctFontNames.Apply(pdf));
+        Assert.Equal(["Helvetica", "Arial"], FontNames(pdf));
+        // Files the reader cannot follow come back untouched as well.
+        byte[] noTable = HandMadePdf("0 0 612 792", "0 0 1 rg 50 550 300 200 re f");
+        Assert.Same(noTable, PdfEditor.Core.Preflight.DistinctFontNames.Apply(noTable));
+        byte[] junk = [1, 2, 3, 4];
+        Assert.Same(junk, PdfEditor.Core.Preflight.DistinctFontNames.Apply(junk));
+    }
+
     private static byte[] HandMadePdf(string mediaBox, string content, string pageExtras = "") =>
         System.Text.Encoding.ASCII.GetBytes(
             "%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n" +

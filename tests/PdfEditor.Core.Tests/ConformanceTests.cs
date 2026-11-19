@@ -161,6 +161,50 @@ public class ConformanceTests(ITestOutputHelper output)
             })));
     }
 
+    /// <summary>
+    /// Renaming clashing fonts appends an update to the file before it is opened. The update must be
+    /// a valid one, in both forms a file's cross-reference can take (a table, or a packed stream).
+    /// </summary>
+    [Fact]
+    public void Renaming_clashing_fonts_gives_a_structurally_valid_file()
+    {
+        if (Qpdf is null)
+        {
+            output.WriteLine("qpdf is not installed, so nothing was checked. Install it with: winget install QPDF.QPDF");
+            return;
+        }
+        byte[] table = PdfDocumentTests.PdfWithTwoFonts("AAAAAB+Helvetica", "AAAAAF+Helvetica");
+
+        // The same file with its objects packed into streams, as most modern programs write them.
+        string source = Path.Combine(Path.GetTempPath(), $"pdfeditor-fonts-{Guid.NewGuid():N}.pdf"), packedPath = source + ".packed.pdf";
+        File.WriteAllBytes(source, table);
+        byte[] packed;
+        try
+        {
+            var info = new ProcessStartInfo(Qpdf, $"--object-streams=generate \"{source}\" \"{packedPath}\"") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+            using var process = Process.Start(info)!;
+            process.StandardOutput.ReadToEnd();
+            process.StandardError.ReadToEnd();
+            process.WaitForExit();
+            packed = File.ReadAllBytes(packedPath);
+        }
+        finally
+        {
+            File.Delete(source);
+            File.Delete(packedPath);
+        }
+
+        foreach (var (name, pdf) in new[] { ("table", table), ("packed", packed) })
+        {
+            byte[] renamed = PdfEditor.Core.Preflight.DistinctFontNames.Apply(pdf);
+            Assert.True(renamed.Length > pdf.Length, $"{name}: nothing was renamed");
+            Assert.Null(Check(renamed));
+            using var doc = PdfDocument.Open(pdf);
+            Assert.Equal(["Helvetica", "Helvetica-2"], PdfDocumentTests.FontNames(pdf));
+            Assert.Null(Check(doc.ToBytes()));
+        }
+    }
+
     [Fact]
     public void Imported_and_ungrouped_documents_are_structurally_valid()
     {
