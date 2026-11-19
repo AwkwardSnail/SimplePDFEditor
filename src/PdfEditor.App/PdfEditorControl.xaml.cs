@@ -116,7 +116,43 @@ public partial class PdfEditorControl : UserControl
             return false;
         }
         ReplaceSession(opened);
+        // Once the page is on screen, so the question is asked with the document in view.
+        var session = _session;
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.ApplicationIdle, () => { if (ReferenceEquals(session, _session)) OfferToConvertLooseText(); });
         return true;
+    }
+
+    /// <summary>
+    /// Part of the check made when a file is opened. Text stored letter by letter, or in Type 3
+    /// fonts (PDFs printed from Chrome are often both), cannot be selected by the line, and Type 3
+    /// text cannot be kept as text when its page is changed. Offers to rebuild it as ordinary text.
+    /// </summary>
+    private void OfferToConvertLooseText()
+    {
+        LooseTextReport report;
+        try { report = Doc.FindLooseText(); }
+        catch (PdfException) { return; }
+        if (!report.Any) return;
+
+        int pages = report.Pages.Count;
+        string where = pages == Doc.PageCount ? (pages == 1 ? "This page" : "Every page") : pages == 1 ? "One page" : $"{pages} of the {Doc.PageCount} pages";
+        string what = report.Type3Pages.Count > 0
+            ? "stores its text letter by letter, in a kind of font (Type 3) that the editor can show but cannot keep as text once a page is changed"
+            : "stores its text letter by letter, so a click picks up one letter at a time";
+        var answer = MessageBox.Show(Window.GetWindow(this),
+            $"{where} of this file {what}. PDFs saved from a web browser are often made this way.\n\n" +
+            "Convert it to ordinary text?\n\n" +
+            "Yes: each line becomes one piece of text" + (report.Type3Pages.Count > 0 ? " in the closest standard font" : "") + ", in the same place and size. " +
+            "Lines can then be selected and moved, and paragraphs rewritten." + (report.Type3Pages.Count > 0 ? " The letters will look a little different." : "") +
+            " Nothing is saved until you save, and Undo brings the original back.\n\n" +
+            "No: the file stays as it is." + (report.Type3Pages.Count > 0 ? " On any page you change, this text is then kept as small pictures of itself, so it still looks the same but is no longer text." : ""),
+            "SimplePDF Editor", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.Yes);
+        if (answer != MessageBoxResult.Yes) return;
+
+        int made = 0;
+        _selection = null;
+        if (Edit(d => made = d.ConvertLooseText()))
+            ShowStatus($"The text was rebuilt as {made} piece{(made == 1 ? "" : "s")} of ordinary text. Undo brings the original back.");
     }
 
     /// <summary>Asks about unsaved changes. Returns false when the user cancels, meaning: do not close.</summary>

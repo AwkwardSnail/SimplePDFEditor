@@ -45,6 +45,7 @@ public sealed unsafe partial class PdfDocument
 
         var replacements = new List<(int Index, IntPtr Old, IntPtr New)>();
         foreach (var glyphs in chars.Values) DropPhantomSpaces(glyphs);
+        KeepType3Text(page, indexOf, chars, replacements); // PDFium leaves Type 3 text out when it writes a page
         SeparateSameNamedFonts(page, indexOf, chars, replacements);
         foreach (var (obj, glyphs) in chars)
         {
@@ -80,6 +81,7 @@ public sealed unsafe partial class PdfDocument
             var font = Native.FPDFTextObj_GetFont(obj);
             if (font == IntPtr.Zero) continue;
             string name = FontName(obj);
+            if (name.Length == 0) continue; // Type 3 text, already seen to by KeepType3Text
             textObjects.Add((obj, font, name));
             if (!uses.TryGetValue(name, out var fonts)) uses[name] = fonts = [];
             fonts[font] = fonts.GetValueOrDefault(font) + 1;

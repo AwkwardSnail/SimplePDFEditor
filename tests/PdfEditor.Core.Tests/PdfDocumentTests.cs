@@ -969,6 +969,84 @@ public class PdfDocumentTests
             "trailer<</Root 1 0 R>>\n%%EOF");
     }
 
+    /// <summary>
+    /// A page the way Chrome's "Save as PDF" often writes one: every letter its own piece of
+    /// text, in a Type 3 font (here two letters, "a" a low block and "b" a tall one). It reads
+    /// "abba ab" on one line and "ba" on the next.
+    /// </summary>
+    internal static byte[] PdfWithType3Letters()
+    {
+        var content = new System.Text.StringBuilder("0 0 0 rg ");
+        void Letter(char c, double x, double y) => content.Append(System.Globalization.CultureInfo.InvariantCulture, $"BT /F1 20 Tf 1 0 0 1 {x} {y} Tm ({c}) Tj ET ");
+        double at = 50;
+        foreach (char c in "abba ab")
+        {
+            if (c == ' ') { at += 6; continue; }
+            Letter(c, at, 700);
+            at += c == 'a' ? 12 : 10;
+        }
+        Letter('b', 50, 670);
+        Letter('a', 60, 670);
+        const string a = "600 0 0 0 600 700 d1 50 0 500 450 re f", b = "500 0 0 0 500 700 d1 50 0 400 700 re f";
+        const string map = "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /T3 def /CMapType 2 def " +
+                           "1 begincodespacerange <00> <FF> endcodespacerange 2 beginbfchar <61> <0061> <62> <0062> endbfchar endcmap CMapName currentdict /CMap defineresource pop end end";
+        return System.Text.Encoding.ASCII.GetBytes(
+            "%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n" +
+            "3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>endobj\n" +
+            $"4 0 obj<</Length {content.Length}>>stream\n{content}\nendstream endobj\n" +
+            "5 0 obj<</Type/Font/Subtype/Type3/FontBBox[0 0 600 700]/FontMatrix[0.001 0 0 0.001 0 0]/CharProcs<</a 6 0 R/b 7 0 R>>" +
+            "/Encoding<</Type/Encoding/Differences[97/a/b]>>/FirstChar 97/LastChar 98/Widths[600 500]/ToUnicode 8 0 R/Resources<<>>>>endobj\n" +
+            $"6 0 obj<</Length {a.Length}>>stream\n{a}\nendstream endobj\n7 0 obj<</Length {b.Length}>>stream\n{b}\nendstream endobj\n" +
+            $"8 0 obj<</Length {map.Length}>>stream\n{map}\nendstream endobj\n" +
+            "trailer<</Root 1 0 R>>\n%%EOF");
+    }
+
+    private static int DarkPixels(RenderedPage r) { int n = 0; for (int i = 0; i < r.Pixels.Length; i += 4) if (r.Pixels[i] < 128) n++; return n; }
+
+    [Fact]
+    public void Type3_text_is_kept_as_pictures_when_its_page_is_rewritten()
+    {
+        using var doc = PdfDocument.Open(PdfWithType3Letters());
+        var report = doc.FindLooseText();
+        Assert.Equal([0], report.Type3Pages);
+        Assert.Equal(8, doc.GetTextRuns(0).Count);
+        var before = doc.Render(0, 1, false);
+        Assert.True(DarkPixels(before) > 600);
+
+        // Moving one letter makes PDFium write the page again, and it cannot write Type 3 text.
+        doc.MoveObject(0, doc.GetTextRuns(0)[0].ObjectIndex, 0, 40);
+        using var saved = PdfDocument.Open(doc.ToBytes());
+        var after = saved.Render(0, 1, false);
+        Assert.InRange(DarkPixels(after), DarkPixels(before) * 0.9, DarkPixels(before) * 1.1); // every letter still shows
+        Assert.Equal(8, saved.GetImages(0).Count);
+        Assert.True(PixelsThatDiffer(before, after, new PdfRect(60, 60, 200, 60)) < 60, "the letters that were not moved look as they did");
+        Assert.True(PixelsThatDiffer(before, after, new PdfRect(48, 105, 14, 30)) > 50, "the moved letter is 40 points lower");
+    }
+
+    [Fact]
+    public void Loose_letters_in_a_Type3_font_become_lines_of_ordinary_text()
+    {
+        using var doc = PdfDocument.Open(PdfWithType3Letters());
+        Assert.Equal(2, doc.ConvertLooseText());
+        using var saved = PdfDocument.Open(doc.ToBytes());
+        var runs = saved.GetTextRuns(0);
+        Assert.Equal(["abba ab", "ba"], runs.Select(r => r.Text.Trim()).ToArray());
+        Assert.All(runs, r => Assert.StartsWith("Helvetica", r.FontName)); // letters of different widths: not a typewriter font
+        Assert.False(saved.FindLooseText().Any);
+
+        // Each line starts where it started and is about as wide as it was.
+        Assert.Equal(50, runs[0].Bounds.X, 1.5);
+        Assert.InRange(runs[0].Bounds.Width, 60, 76); // it was 72 wide; a look-alike is fitted to within reason
+        Assert.InRange(runs[0].Bounds.Bottom, 88, 97); // the baseline was 92 from the top
+        Assert.Equal(50, runs[1].Bounds.X, 1.5);
+
+        // Now it is ordinary text, a later change to the page keeps it.
+        saved.MoveObject(0, runs[1].ObjectIndex, 30, 0);
+        using var again = PdfDocument.Open(saved.ToBytes());
+        Assert.Equal(["abba ab", "ba"], again.GetTextRuns(0).Select(r => r.Text.Trim()).ToArray());
+        Assert.Empty(again.GetImages(0));
+    }
+
     private static int PixelsThatDiffer(RenderedPage a, RenderedPage b, PdfRect area)
     {
         int changed = 0;

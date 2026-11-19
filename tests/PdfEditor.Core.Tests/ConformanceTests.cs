@@ -250,6 +250,18 @@ public class ConformanceTests(ITestOutputHelper output)
                 doc.AddWatermark(0, "DRAFT");
                 return doc;
             }),
+            ("Type 3 letters rebuilt as ordinary text", () =>
+            {
+                var doc = PdfDocument.Open(PdfDocumentTests.PdfWithType3Letters());
+                doc.ConvertLooseText();
+                return doc;
+            }),
+            ("Type 3 letters kept as pictures after a move", () =>
+            {
+                var doc = PdfDocument.Open(PdfDocumentTests.PdfWithType3Letters());
+                doc.MoveObject(0, doc.GetTextRuns(0)[0].ObjectIndex, 0, 40);
+                return doc;
+            }),
             ("page spread over sheets placed by hand", () =>
             {
                 using var doc = PdfDocument.Open(Fixture("word-style.pdf"));
