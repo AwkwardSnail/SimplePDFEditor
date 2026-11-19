@@ -718,6 +718,53 @@ public class PdfDocumentTests
         Assert.True(changed < expected.Width * expected.Height / 200, $"{changed} pixels differ");
     }
 
+    [Fact]
+    public void Sheets_placed_by_hand_show_the_part_of_the_page_they_lie_on()
+    {
+        using var doc = PdfDocument.Open(Path.Combine(AppContext.BaseDirectory, "Fixtures", "word-style.pdf"));
+        var page = doc.GetPageSize(0);
+        var options = new TileOptions { PaperWidth = 419.5, PaperHeight = 595.3 };
+
+        // Placed where the grid would put them, the sheets come out the same as the grid's.
+        var grid = PdfDocument.TileSheets(page, options);
+        Assert.Equal(4, grid.Count);
+        using var auto = doc.CreateTiles(0, options with { CutMarks = false });
+        using var byHand = doc.CreateTiles(0, grid, options with { CutMarks = false });
+        for (int i = 0; i < 4; i++) Assert.Equal(auto.Render(i, 1, false).Pixels, byHand.Render(i, 1, false).Pixels);
+
+        // Two sheets, one upright and one on its side, saved in the order given and each with its own paper.
+        TileSheet[] two = [new(-14, -14, 419.5, 595.3), new(100, 300, 595.3, 419.5)];
+        using var mixed = doc.CreateTiles(0, two, options);
+        Assert.Equal(2, mixed.PageCount);
+        Assert.Equal(419.5, mixed.GetPageSize(0).Width, 0.1);
+        Assert.Equal(595.3, mixed.GetPageSize(1).Width, 0.1);
+        Assert.Contains("Sheet 2 of 2", mixed.GetPageText(1));
+        Assert.Contains("Awkward Snail", mixed.GetPageText(0));
+
+        // A sheet at twice the size shows half as much of the page, starting where the sheet's corner lies.
+        using var doubled = doc.CreateTiles(0, [new TileSheet(100, 150, page.Width, page.Height)],
+            new TileOptions { Margin = 0, Scale = 2, CutMarks = false });
+        var whole = doc.Render(0, 2, false);
+        var part = doubled.Render(0, 1, false);
+        // Text drawn through a scaled copy is smoothed a little differently, so compare places:
+        // the picture must match the page far better where it should be than two pixels off any way.
+        int Differ(int dx, int dy)
+        {
+            int changed = 0;
+            for (int y = 8; y < part.Height - 8; y += 3)
+                for (int x = 8; x < part.Width - 8; x += 3)
+                {
+                    int a = (y * part.Width + x) * 4, b = ((y + 300 + dy) * whole.Width + x + 200 + dx) * 4;
+                    if (Math.Abs(part.Pixels[a] - whole.Pixels[b]) + Math.Abs(part.Pixels[a + 1] - whole.Pixels[b + 1]) + Math.Abs(part.Pixels[a + 2] - whole.Pixels[b + 2]) > 120) changed++;
+                }
+            return changed;
+        }
+        int inPlace = Differ(0, 0);
+        foreach (var (dx, dy) in new[] { (2, 0), (-2, 0), (0, 2), (0, -2) })
+            Assert.True(inPlace * 2 < Differ(dx, dy), $"{inPlace} pixels differ in place, {Differ(dx, dy)} when shifted by {dx}, {dy}");
+        Assert.Equal(1, doc.PageCount);
+    }
+
     /// <summary>A green box, a red-to-blue gradient, and a "gradient" that is black all over (as some programs write a transparent one).</summary>
     internal static byte[] PdfWithGradients()
     {

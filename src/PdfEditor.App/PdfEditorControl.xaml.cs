@@ -380,7 +380,17 @@ public partial class PdfEditorControl : UserControl
     {
         CommitEditor();
         EndPageBreak();
-        if (TilesDialog.Show(this, Doc.GetPageSize(_page)) is not { } options) return;
+        var pageSize = Doc.GetPageSize(_page);
+        BitmapSource? small = null;
+        try
+        {
+            // A small picture of the page for the dialog to lay the sheets over.
+            var image = Doc.Render(_page, Math.Min(2, 1100 / Math.Max(pageSize.Width, pageSize.Height)));
+            small = BitmapSource.Create(image.Width, image.Height, 96, 96, PixelFormats.Bgr32, null, image.Pixels, image.Stride);
+            small.Freeze();
+        }
+        catch (Exception ex) when (ex is PdfException or ArgumentException or OutOfMemoryException) { } // the dialog then shows a blank page
+        if (TilesDialog.Show(this, pageSize, small) is not { } choice) return;
         string name = Path.GetFileNameWithoutExtension(_session.FilePath ?? _session.SuggestedFileName);
         var dialog = new SaveFileDialog
         {
@@ -396,7 +406,7 @@ public partial class PdfEditorControl : UserControl
         }
         try
         {
-            using var tiles = Doc.CreateTiles(_page, options);
+            using var tiles = choice.Sheets is { } sheets ? Doc.CreateTiles(_page, sheets, choice.Options) : Doc.CreateTiles(_page, choice.Options);
             tiles.Save(dialog.FileName);
             ShowStatus($"Saved {tiles.PageCount} sheet{(tiles.PageCount == 1 ? "" : "s")} to {Path.GetFileName(dialog.FileName)}. Print it at 100% (no fit to page). This document is unchanged.");
         }

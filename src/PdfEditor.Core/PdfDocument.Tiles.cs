@@ -28,6 +28,13 @@ public readonly record struct TileLayout(int Columns, int Rows, double Scale, do
     public int Sheets => Columns * Rows;
 }
 
+/// <summary>
+/// One sheet of paper laid on a page: where its top-left corner lies on the page as seen (in the
+/// page's own points, before any scaling), and the paper's size. At scale 2 a sheet covers half
+/// its paper's width and height of the page.
+/// </summary>
+public readonly record struct TileSheet(double X, double Y, double PaperWidth, double PaperHeight);
+
 public sealed unsafe partial class PdfDocument
 {
     /// <summary>The part of each sheet that carries picture, and how far apart neighbouring sheets start.</summary>
@@ -59,6 +66,24 @@ public sealed unsafe partial class PdfDocument
     }
 
     /// <summary>
+    /// Where each sheet lies on the page for these options: left to right, top row first. The
+    /// sheets together are centred on the page, so the outer ones hang over its edges.
+    /// </summary>
+    public static IReadOnlyList<TileSheet> TileSheets(PdfSize page, TileOptions options)
+    {
+        var layout = PlanTiles(page, options);
+        var (_, _, stepX, stepY) = TileGrid(options);
+        double offsetX = (layout.Columns * stepX + options.Overlap - layout.PosterWidth) / 2;
+        double offsetY = (layout.Rows * stepY + options.Overlap - layout.PosterHeight) / 2;
+        var sheets = new List<TileSheet>(layout.Sheets);
+        for (int row = 0; row < layout.Rows; row++)
+            for (int column = 0; column < layout.Columns; column++)
+                sheets.Add(new TileSheet((column * stepX - options.Margin - offsetX) / options.Scale,
+                    (row * stepY - options.Margin - offsetY) / options.Scale, options.PaperWidth, options.PaperHeight));
+        return sheets;
+    }
+
+    /// <summary>
     /// Makes a new document that prints one page of this one across several sheets of paper, to be
     /// trimmed and joined into a poster. This document is not changed. The page is stored once in
     /// the new file and each sheet shows its own part of it, so the file stays about as small as
@@ -68,13 +93,78 @@ public sealed unsafe partial class PdfDocument
     {
         var size = GetPageSize(pageIndex);
         var layout = PlanTiles(size, options);
-        var (windowW, windowH, stepX, stepY) = TileGrid(options);
-        if (layout.Sheets > 400) throw new PdfException($"That would take {layout.Sheets} sheets. Choose a smaller size or larger paper.");
-        double margin = options.Margin, paperW = options.PaperWidth, paperH = options.PaperHeight;
+        var (_, _, stepX, stepY) = TileGrid(options);
+        if (layout.Sheets > MaxTileSheets) throw new PdfException($"That would take {layout.Sheets} sheets. Choose a smaller size or larger paper.");
+        var sheets = TileSheets(size, options);
+        double margin = options.Margin;
 
-        // The whole poster sits centred on the area the sheets cover together.
-        double offsetX = (layout.Columns * stepX + options.Overlap - layout.PosterWidth) / 2;
-        double offsetY = (layout.Rows * stepY + options.Overlap - layout.PosterHeight) / 2;
+        var plans = new List<SheetPlan>(sheets.Count);
+        for (int row = 0; row < layout.Rows; row++)
+            for (int column = 0; column < layout.Columns; column++)
+            {
+                var sheet = sheets[row * layout.Columns + column];
+                double left = -sheet.X * options.Scale, top = -sheet.Y * options.Scale;
+                bool lastColumn = column == layout.Columns - 1, lastRow = row == layout.Rows - 1;
+                // Trim the left and top edges; the right and bottom marks show where the
+                // next sheet's trimmed edge lands (or, on the outside, where the poster ends).
+                double trimLeft = column == 0 ? left : margin, trimTop = row == 0 ? top : margin;
+                double nextLeft = lastColumn ? left + layout.PosterWidth : margin + stepX;
+                double nextTop = lastRow ? top + layout.PosterHeight : margin + stepY;
+                plans.Add(new SheetPlan(sheet, [trimLeft, nextLeft], [trimTop, nextTop],
+                    layout.Sheets > 1 ? $"Row {row + 1}, column {column + 1}" : null));
+            }
+        return MakeTiles(pageIndex, plans, options);
+    }
+
+    /// <summary>
+    /// As <see cref="CreateTiles(int, TileOptions)"/>, but with each sheet placed by hand. The
+    /// options give the scale, the blank edge and whether to draw marks; the paper comes from each
+    /// sheet, and the sheets are saved in the order given.
+    /// </summary>
+    public PdfDocument CreateTiles(int pageIndex, IReadOnlyList<TileSheet> sheets, TileOptions options)
+    {
+        if (sheets.Count == 0) throw new ArgumentException("At least one sheet is needed.");
+        if (sheets.Count > MaxTileSheets) throw new PdfException($"That would take {sheets.Count} sheets. Use fewer.");
+        if (options.Margin < 0 || options.Scale <= 0) throw new ArgumentException("The margin and scale cannot be negative.");
+        var size = GetPageSize(pageIndex);
+        double scale = options.Scale, margin = options.Margin;
+        foreach (var s in sheets)
+            if (s.PaperWidth - 2 * margin < 36 || s.PaperHeight - 2 * margin < 36)
+                throw new ArgumentException("The margin leaves too little of the paper to print on.");
+
+        var plans = new List<SheetPlan>(sheets.Count);
+        for (int i = 0; i < sheets.Count; i++)
+        {
+            var sheet = sheets[i];
+            double left = -sheet.X * scale, top = -sheet.Y * scale;
+            // Marks where the poster ends, and where each sheet that shares picture with this one starts.
+            var markX = new List<double> { left, left + size.Width * scale };
+            var markY = new List<double> { top, top + size.Height * scale };
+            for (int j = 0; j < sheets.Count; j++)
+            {
+                if (j == i) continue;
+                var other = sheets[j];
+                double dx = (other.X - sheet.X) * scale, dy = (other.Y - sheet.Y) * scale; // the other sheet's corner, on this one
+                bool share = dx + other.PaperWidth - margin > margin && dx + margin < sheet.PaperWidth - margin &&
+                             dy + other.PaperHeight - margin > margin && dy + margin < sheet.PaperHeight - margin;
+                if (!share) continue;
+                if (dx > 0.5) markX.Add(margin + dx);
+                if (dy > 0.5) markY.Add(margin + dy);
+            }
+            plans.Add(new SheetPlan(sheet, markX, markY, sheets.Count > 1 ? $"Sheet {i + 1} of {sheets.Count}" : null));
+        }
+        return MakeTiles(pageIndex, plans, options);
+    }
+
+    private const int MaxTileSheets = 400;
+
+    /// <summary>One sheet to make: where it lies, where its marks go (measured from its top-left corner) and what to call it.</summary>
+    private sealed record SheetPlan(TileSheet Sheet, IReadOnlyList<double> MarkX, IReadOnlyList<double> MarkY, string? Label);
+
+    private PdfDocument MakeTiles(int pageIndex, IReadOnlyList<SheetPlan> plans, TileOptions options)
+    {
+        var size = GetPageSize(pageIndex);
+        double margin = options.Margin, scale = options.Scale;
 
         // What is on the page, as one box in the page as seen (top-left origin). Used below to find
         // out where PDFium's copy of the page puts things.
@@ -118,67 +208,60 @@ public sealed unsafe partial class PdfDocument
                 }
             }
 
-            for (int row = 0; row < layout.Rows; row++)
-                for (int column = 0; column < layout.Columns; column++)
+            for (int index = 0; index < plans.Count; index++)
+            {
+                var plan = plans[index];
+                double paperW = plan.Sheet.PaperWidth, paperH = plan.Sheet.PaperHeight;
+                var sheet = Native.FPDFPage_New(result.Doc, index, paperW, paperH);
+                if (sheet == IntPtr.Zero) throw new PdfException("Could not add a sheet.");
+                try
                 {
-                    int index = row * layout.Columns + column;
-                    var sheet = Native.FPDFPage_New(result.Doc, index, paperW, paperH);
-                    if (sheet == IntPtr.Zero) throw new PdfException("Could not add a sheet.");
-                    try
+                    // Where the poster's top-left corner falls on this sheet, measured from the sheet's top-left.
+                    double left = -plan.Sheet.X * scale, top = -plan.Sheet.Y * scale;
+
+                    var picture = Native.FPDF_NewFormObjectFromXObject(shared);
+                    if (picture == IntPtr.Zero) throw new PdfException("The page could not be placed on a sheet.");
+                    // Scaled and moved into place, in the sheet's coordinates (which start at its bottom-left).
+                    var m = new Native.FS_MATRIX
                     {
-                        // Where the poster's top-left corner falls on this sheet, measured from the sheet's top-left.
-                        double left = margin + offsetX - column * stepX, top = margin + offsetY - row * stepY;
+                        a = (float)scale, d = (float)scale,
+                        e = (float)(left - scale * shiftX), f = (float)(paperH - top - scale * shiftY),
+                    };
+                    Native.FPDFPageObj_SetMatrix(picture, &m);
+                    Native.FPDFPage_InsertObject(sheet, picture);
 
-                        var picture = Native.FPDF_NewFormObjectFromXObject(shared);
-                        if (picture == IntPtr.Zero) throw new PdfException("The page could not be placed on a sheet.");
-                        // Scaled and moved into place, in the sheet's coordinates (which start at its bottom-left).
-                        double scale = options.Scale;
-                        var m = new Native.FS_MATRIX
-                        {
-                            a = (float)scale, d = (float)scale,
-                            e = (float)(left - scale * shiftX), f = (float)(paperH - top - scale * shiftY),
-                        };
-                        Native.FPDFPageObj_SetMatrix(picture, &m);
-                        Native.FPDFPage_InsertObject(sheet, picture);
-
-                        // Blank the edge the printer cannot reach, so nothing is half printed there.
-                        if (margin > 0)
-                        {
-                            Box(sheet, 0, 0, paperW, margin, paperH);
-                            Box(sheet, 0, paperH - margin, paperW, margin, paperH);
-                            Box(sheet, 0, 0, margin, paperH, paperH);
-                            Box(sheet, paperW - margin, 0, margin, paperH, paperH);
-                        }
-
-                        if (options.CutMarks && margin >= 8)
-                        {
-                            bool lastColumn = column == layout.Columns - 1, lastRow = row == layout.Rows - 1;
-                            // Trim the left and top edges; the right and bottom marks show where the
-                            // next sheet's trimmed edge lands (or, on the outside, where the poster ends).
-                            double trimLeft = column == 0 ? left : margin, trimTop = row == 0 ? top : margin;
-                            double nextLeft = lastColumn ? left + layout.PosterWidth : margin + stepX;
-                            double nextTop = lastRow ? top + layout.PosterHeight : margin + stepY;
-                            foreach (double x in new[] { trimLeft, nextLeft })
-                            {
-                                if (x < margin - 0.01 || x > paperW - margin + 0.01) continue;
-                                Mark(sheet, x, 2, x, margin - 2, paperH);
-                                Mark(sheet, x, paperH - margin + 2, x, paperH - 2, paperH);
-                            }
-                            foreach (double y in new[] { trimTop, nextTop })
-                            {
-                                if (y < margin - 0.01 || y > paperH - margin + 0.01) continue;
-                                Mark(sheet, 2, y, margin - 2, y, paperH);
-                                Mark(sheet, paperW - margin + 2, y, paperW - 2, y, paperH);
-                            }
-                        }
-                        Native.FPDFPage_GenerateContent(sheet);
+                    // Blank the edge the printer cannot reach, so nothing is half printed there.
+                    if (margin > 0)
+                    {
+                        Box(sheet, 0, 0, paperW, margin, paperH);
+                        Box(sheet, 0, paperH - margin, paperW, margin, paperH);
+                        Box(sheet, 0, 0, margin, paperH, paperH);
+                        Box(sheet, paperW - margin, 0, margin, paperH, paperH);
                     }
-                    finally { Native.FPDF_ClosePage(sheet); }
 
-                    if (options.CutMarks && margin >= 8 && layout.Sheets > 1)
-                        result.AddText(index, margin + 14, Math.Max(1, (margin - 6) / 2 - 1), $"Row {row + 1}, column {column + 1}",
-                            new TextStyle { Size = 6, Color = new PdfColor(110, 110, 110) });
+                    if (options.CutMarks && margin >= 8)
+                    {
+                        foreach (double x in plan.MarkX)
+                        {
+                            if (x < margin - 0.01 || x > paperW - margin + 0.01) continue;
+                            Mark(sheet, x, 2, x, margin - 2, paperH);
+                            Mark(sheet, x, paperH - margin + 2, x, paperH - 2, paperH);
+                        }
+                        foreach (double y in plan.MarkY)
+                        {
+                            if (y < margin - 0.01 || y > paperH - margin + 0.01) continue;
+                            Mark(sheet, 2, y, margin - 2, y, paperH);
+                            Mark(sheet, paperW - margin + 2, y, paperW - 2, y, paperH);
+                        }
+                    }
+                    Native.FPDFPage_GenerateContent(sheet);
                 }
+                finally { Native.FPDF_ClosePage(sheet); }
+
+                if (options.CutMarks && margin >= 8 && plan.Label is not null)
+                    result.AddText(index, margin + 14, Math.Max(1, (margin - 6) / 2 - 1), plan.Label,
+                        new TextStyle { Size = 6, Color = new PdfColor(110, 110, 110) });
+            }
             return result;
         }
         catch
@@ -190,7 +273,6 @@ public sealed unsafe partial class PdfDocument
         {
             if (shared != IntPtr.Zero) Native.FPDF_CloseXObject(shared);
         }
-
         // Both helpers take positions measured from the sheet's top-left corner.
         static void Box(IntPtr sheet, double x, double y, double w, double h, double sheetHeight)
         {
