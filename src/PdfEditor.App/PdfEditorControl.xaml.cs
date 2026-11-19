@@ -18,9 +18,9 @@ namespace PdfEditor.App;
 /// </summary>
 public partial class PdfEditorControl : UserControl
 {
-    private enum Tool { Select, Text, Highlight, Comment }
+    private enum Tool { Select, Text, Highlight, Comment, Line, Arrow, Box, Circle, Spline }
     private enum ItemKind { Text, Image, Annotation, Drawing }
-    private enum Drag { None, Move, Resize, Highlight }
+    private enum Drag { None, Move, Resize, Highlight, Shape }
 
     /// <summary>What is currently selected on the page. Bounds are in page points.</summary>
     /// <summary>For a drawing, Index is its first shape and Group lists all of its shapes.</summary>
@@ -44,6 +44,12 @@ public partial class PdfEditorControl : UserControl
 
     private Selection? _selection;
     private Drag _drag;
+    /// <summary>The shape being drawn, as points on the page: the two ends of a drag, or a spline's points so far followed by where the mouse is.</summary>
+    private List<PdfPoint>? _shape;
+    private int _shapePage;
+
+    private static readonly (string Name, PdfColor Colour)[] ShapeColours =
+        [("Black", PdfColor.Black), ("Red", new(200, 30, 30)), ("Blue", new(30, 70, 200)), ("Green", new(20, 130, 60)), ("Grey", new(110, 110, 110)), ("White", new(255, 255, 255)), ("Yellow", PdfColor.Yellow)];
     private Point _dragStart;            // page points
     private PdfRect _dragBounds;         // where the dragged item would land
     private int _highlightStartChar, _highlightEndChar;
@@ -60,6 +66,9 @@ public partial class PdfEditorControl : UserControl
     {
         InitializeComponent();
         Thumbs.ItemsSource = _pages;
+        FillColours(LineColourBox, ShapeColours);
+        FillBox.Items.Add(new ComboBoxItem { Content = "None" });
+        FillColours(FillBox, ShapeColours); // leaves "None", the first, selected
         FillColours(ColorBox, [("Black", PdfColor.Black), ("Red", new(200, 30, 30)), ("Blue", new(30, 70, 200)), ("Green", new(20, 130, 60)), ("Grey", new(110, 110, 110)), ("White", new(255, 255, 255))]);
         FillColours(HighlightBox, [("Yellow", PdfColor.Yellow), ("Green", new(140, 235, 130)), ("Pink", new(255, 160, 200)), ("Blue", new(140, 200, 255)), ("Orange", new(255, 190, 90))]);
         PreviewKeyDown += OnPreviewKeyDown;
@@ -280,6 +289,40 @@ public partial class PdfEditorControl : UserControl
                 Canvas.SetLeft(handle, bounds.Right * ViewScale - HandleSize / 2);
                 Canvas.SetTop(handle, bounds.Bottom * ViewScale - HandleSize / 2);
                 Overlay.Children.Add(handle);
+            }
+        }
+        if (_shape is not null && _shapePage != _page) _shape = null; // left behind on another page
+        if (_shape is { } drawn)
+        {
+            // The shape as it will be: the same outline the engine draws, at the size shown.
+            var style = CurrentShapeStyle();
+            var kind = CurrentShapeKind;
+            var outline = PdfDocument.ShapeOutline(kind, drawn, style.Width);
+            if (outline.Count > 0)
+            {
+                var geometry = new StreamGeometry();
+                using (var g = geometry.Open())
+                {
+                    Point At(PdfPoint q) => new(q.X * ViewScale, q.Y * ViewScale);
+                    bool open = false;
+                    foreach (var step in outline)
+                    {
+                        if (step.Kind == 'M') { g.BeginFigure(At(step.End), true, false); open = true; }
+                        else if (!open) continue;
+                        else if (step.Kind == 'L') g.LineTo(At(step.End), true, true);
+                        else if (step.Kind == 'C') g.BezierTo(At(step.Control1), At(step.Control2), At(step.End), true, true);
+                        else if (step.Kind == 'Z') g.LineTo(At(outline.Last(s => s.Kind == 'M').End), true, true);
+                    }
+                }
+                var stroke = new SolidColorBrush(ToColor(style.Stroke));
+                PdfColor? inside = kind switch { ShapeKind.Arrow => style.Stroke, ShapeKind.Line => null, _ => style.Fill };
+                Overlay.Children.Add(new System.Windows.Shapes.Path
+                {
+                    Data = geometry, Stroke = stroke, StrokeThickness = Math.Max(1, style.Width * ViewScale), IsHitTestVisible = false,
+                    Fill = inside is { } c ? new SolidColorBrush(ToColor(c)) : null,
+                    StrokeLineJoin = kind == ShapeKind.Box ? PenLineJoin.Miter : PenLineJoin.Round,
+                    StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round,
+                });
             }
         }
         if (_breakPositions is not null && !double.IsNaN(_breakY))
@@ -574,7 +617,8 @@ public partial class PdfEditorControl : UserControl
         CommitEditor();
         _tool = Enum.Parse<Tool>(name);
         _breakPositions = null;
-        Overlay.Cursor = _tool switch { Tool.Text => Cursors.IBeam, Tool.Highlight => Cursors.Cross, Tool.Comment => Cursors.Pen, _ => Cursors.Arrow };
+        _shape = null;
+        Overlay.Cursor = _tool switch { Tool.Text => Cursors.IBeam, Tool.Highlight => Cursors.Cross, Tool.Comment => Cursors.Pen, Tool.Select => Cursors.Arrow, _ => Cursors.Cross };
         UpdateHint();
         DrawOverlay();
     }
@@ -584,6 +628,11 @@ public partial class PdfEditorControl : UserControl
         Tool.Text => "Click where the text should start. Enter adds a line; Ctrl+Enter or a click elsewhere finishes; Esc cancels.",
         Tool.Highlight => "Drag across text to highlight it. Dragging over an empty area highlights that area.",
         Tool.Comment => "Click where the comment should go.",
+        Tool.Line => "Drag to draw a line. Shift keeps it level, upright or at 45 degrees. Right-click a shape to fill or delete it.",
+        Tool.Arrow => "Drag to draw an arrow; it points where the drag ends. Shift keeps it level, upright or at 45 degrees.",
+        Tool.Box => "Drag to draw a box. Shift makes it square. Right-click a shape to fill it, make it see-through or delete it.",
+        Tool.Circle => "Drag to draw a circle or oval. Shift keeps it round. Right-click a shape to fill it, make it see-through or delete it.",
+        Tool.Spline => "Click point after point; the curve passes through each. Double-click or Enter finishes; Esc cancels.",
         _ => "Click to select, drag to move, Delete to remove. Double-click a paragraph to rewrite it (it re-flows), or a comment to edit it.",
     };
 
@@ -671,6 +720,15 @@ public partial class PdfEditorControl : UserControl
             case Tool.Comment:
                 AddComment(p);
                 break;
+            case Tool.Spline:
+                SplineClick(p, e.ClickCount);
+                break;
+            case Tool.Line or Tool.Arrow or Tool.Box or Tool.Circle:
+                _shape = [new PdfPoint(p.X, p.Y), new PdfPoint(p.X, p.Y)];
+                _shapePage = _page;
+                _drag = Drag.Shape;
+                Overlay.CaptureMouse();
+                break;
         }
         e.Handled = true;
     }
@@ -742,10 +800,21 @@ public partial class PdfEditorControl : UserControl
             MoveBreakLine(PagePoint(e).Y);
             return;
         }
-        if (_drag == Drag.None || _selection is null && _drag != Drag.Highlight) return;
+        if (_tool == Tool.Spline && _shape is { Count: > 0 } curve && _drag == Drag.None)
+        {
+            // The last point follows the mouse, showing where the curve would go next.
+            var at = PagePoint(e);
+            curve[^1] = new PdfPoint(at.X, at.Y);
+            DrawOverlay();
+            return;
+        }
+        if (_drag == Drag.None || _selection is null && _drag is not (Drag.Highlight or Drag.Shape)) return;
         var p = PagePoint(e);
         switch (_drag)
         {
+            case Drag.Shape when _shape is { Count: 2 } ends:
+                ends[1] = Constrain(ends[0], new PdfPoint(p.X, p.Y));
+                break;
             case Drag.Move:
                 var s = _selection!.Bounds;
                 _dragBounds = new PdfRect(s.X + p.X - _dragStart.X, s.Y + p.Y - _dragStart.Y, s.Width, s.Height);
@@ -786,6 +855,16 @@ public partial class PdfEditorControl : UserControl
         Overlay.ReleaseMouseCapture();
         int page = _page;
 
+        if (drag == Drag.Shape)
+        {
+            var points = _shape;
+            _shape = null;
+            // A click without a drag draws nothing.
+            if (points is { Count: 2 } && Math.Abs(points[0].X - points[1].X) + Math.Abs(points[0].Y - points[1].Y) > 3) AddShape(points);
+            else DrawOverlay();
+            return;
+        }
+
         if (drag == Drag.Highlight)
         {
             var rects = _highlightRects;
@@ -810,6 +889,113 @@ public partial class PdfEditorControl : UserControl
         else if (drag == Drag.Resize && Math.Abs(target.Width - s.Bounds.Width) > 0.5)
             Edit(d => d.SetImageBounds(page, s.Index, target));
         else DrawOverlay();
+    }
+
+    // ------------------------------------------------------------------ drawing shapes
+
+    private ShapeKind CurrentShapeKind => _tool switch
+    {
+        Tool.Arrow => ShapeKind.Arrow, Tool.Box => ShapeKind.Box, Tool.Circle => ShapeKind.Ellipse, Tool.Spline => ShapeKind.Spline, _ => ShapeKind.Line,
+    };
+
+    private ShapeStyle CurrentShapeStyle() => new()
+    {
+        Stroke = CurrentColour(LineColourBox),
+        Width = LineWidthBox.SelectedItem is ComboBoxItem { Tag: string width } ? double.Parse(width, CultureInfo.InvariantCulture) : 2,
+        Fill = FillBox.SelectedItem is ComboBoxItem { Tag: PdfColor fill } ? fill : null,
+    };
+
+    /// <summary>With Shift held: a line or arrow keeps to level, upright or 45 degrees; a box is square and a circle round.</summary>
+    private PdfPoint Constrain(PdfPoint from, PdfPoint to)
+    {
+        if ((Keyboard.Modifiers & ModifierKeys.Shift) == 0) return to;
+        double dx = to.X - from.X, dy = to.Y - from.Y;
+        if (_tool is Tool.Box or Tool.Circle)
+        {
+            double side = Math.Max(Math.Abs(dx), Math.Abs(dy));
+            return new PdfPoint(from.X + (dx < 0 ? -side : side), from.Y + (dy < 0 ? -side : side));
+        }
+        double length = Math.Sqrt(dx * dx + dy * dy), angle = Math.Round(Math.Atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4);
+        return new PdfPoint(from.X + length * Math.Cos(angle), from.Y + length * Math.Sin(angle));
+    }
+
+    /// <summary>A click with the Spline tool adds a point; a double-click finishes the curve.</summary>
+    private void SplineClick(Point p, int clickCount)
+    {
+        var at = new PdfPoint(p.X, p.Y);
+        if (_shape is null || _shapePage != _page)
+        {
+            _shape = [at, at]; // the first point, and the one that follows the mouse
+            _shapePage = _page;
+        }
+        else if (clickCount >= 2) { FinishSpline(); return; }
+        else
+        {
+            _shape[^1] = at;
+            _shape.Add(at);
+        }
+        DrawOverlay();
+    }
+
+    private void FinishSpline()
+    {
+        var points = _shape;
+        _shape = null;
+        if (points is null) return;
+        points.RemoveAt(points.Count - 1); // the point that was following the mouse
+        if (points.Count >= 2 && PdfDocument.ShapeOutline(ShapeKind.Spline, points, 1).Count > 0) AddShape(points);
+        else DrawOverlay();
+    }
+
+    private void AddShape(List<PdfPoint> points)
+    {
+        int page = _page;
+        var kind = CurrentShapeKind;
+        var style = CurrentShapeStyle();
+        _selection = null;
+        Edit(d => d.AddShape(page, kind, points, style));
+    }
+
+    /// <summary>
+    /// A right-click on a drawing offers to fill it, make it see-through or delete it. Returns
+    /// false when there is no drawing at the point.
+    /// </summary>
+    private bool ShowDrawingMenu(Point p)
+    {
+        var drawing = _drawings.Where(d => d.Bounds.Contains(p.X, p.Y)).OrderBy(d => d.Bounds.Width * d.Bounds.Height).FirstOrDefault();
+        if (drawing is null) return false;
+        Focus();
+        Select(new Selection(ItemKind.Drawing, drawing.ObjectIndices[0], drawing.Bounds, drawing.ObjectIndices));
+
+        int page = _page;
+        var shapes = drawing.ObjectIndices;
+        var menu = new ContextMenu { PlacementTarget = Overlay };
+        void Fill(object header, PdfColor? colour, string done)
+        {
+            var item = new MenuItem { Header = header };
+            item.Click += (_, _) =>
+            {
+                _selection = null;
+                int changed = 0;
+                if (!Edit(d => changed = d.SetShapeFill(page, shapes, colour))) return;
+                ShowStatus(changed > 0 ? done : "Nothing to fill here: lines and arrows take no fill.");
+            };
+            menu.Items.Add(item);
+        }
+        Fill("See-through (no fill)", null, "The shape is see-through now. Undo puts the fill back.");
+        foreach (var (name, colour) in ShapeColours)
+        {
+            var row = new StackPanel { Orientation = Orientation.Horizontal };
+            row.Children.Add(new Rectangle { Width = 14, Height = 14, Fill = new SolidColorBrush(ToColor(colour)), Stroke = Brushes.Gray, StrokeThickness = 1, Margin = new Thickness(0, 0, 6, 0) });
+            row.Children.Add(new TextBlock { Text = "Fill " + name.ToLowerInvariant() });
+            Fill(row, colour, $"Filled {name.ToLowerInvariant()}.");
+        }
+        menu.Items.Add(new Separator());
+        var delete = new MenuItem { Header = "Delete" };
+        delete.Click += (_, _) => DeleteSelection();
+        menu.Items.Add(delete);
+        menu.IsOpen = true;
+        return true;
     }
 
     // ------------------------------------------------------------------ typing on the page
@@ -1089,6 +1275,8 @@ public partial class PdfEditorControl : UserControl
         else if (ctrl && e.Key == Key.Z && !shift) Undo_Click(this, e);
         else if (ctrl && (e.Key == Key.Y || e.Key == Key.Z && shift)) Redo_Click(this, e);
         else if (e.Key == Key.Delete && _selection is not null) DeleteSelection();
+        else if (e.Key == Key.Escape && _shape is not null) { _shape = null; if (_drag == Drag.Shape) { _drag = Drag.None; Overlay.ReleaseMouseCapture(); } DrawOverlay(); }
+        else if (e.Key == Key.Enter && _tool == Tool.Spline && _shape is not null) FinishSpline();
         else if (e.Key == Key.Escape && _breakPositions is not null) { EndPageBreak(); UpdateHint(); }
         else if (e.Key == Key.Escape) Select(null);
         else if (e.Key == Key.PageDown) GoToPage(_page + 1);
@@ -1248,7 +1436,7 @@ public partial class PdfEditorControl : UserControl
         var image = _images.LastOrDefault(i => i.Bounds.Contains(p.X, p.Y));
         if (image is null)
         {
-            e.Handled = ShowGradientMenu(p);
+            e.Handled = ShowGradientMenu(p) || ShowDrawingMenu(p);
             return;
         }
         Focus();
@@ -1494,7 +1682,7 @@ public partial class PdfEditorControl : UserControl
         if (_breakPositions is null) return;
         _breakPositions = null;
         _breakY = double.NaN;
-        Overlay.Cursor = _tool switch { Tool.Text => Cursors.IBeam, Tool.Highlight => Cursors.Cross, Tool.Comment => Cursors.Pen, _ => Cursors.Arrow };
+        Overlay.Cursor = _tool switch { Tool.Text => Cursors.IBeam, Tool.Highlight => Cursors.Cross, Tool.Comment => Cursors.Pen, Tool.Select => Cursors.Arrow, _ => Cursors.Cross };
         DrawOverlay();
     }
 
@@ -1569,7 +1757,8 @@ public partial class PdfEditorControl : UserControl
             row.Children.Add(new TextBlock { Text = name });
             box.Items.Add(new ComboBoxItem { Content = row, Tag = colour });
         }
-        box.SelectedIndex = 0;
+        if (box.SelectedIndex < 0) box.SelectedIndex = 0;
+        else box.SelectedIndex = 0;
     }
 
     private static PdfColor CurrentColour(ComboBox box) => box.SelectedItem is ComboBoxItem { Tag: PdfColor colour } ? colour : PdfColor.Black;

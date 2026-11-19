@@ -229,6 +229,18 @@ public class ConformanceTests(ITestOutputHelper output)
                 doc.ResizePage(0, 420, 595, scaleContent: false);
                 return doc;
             }),
+            ("shapes drawn on a page, then filled and unfilled", () =>
+            {
+                var doc = PdfDocument.Open(Fixture("word-style.pdf"));
+                var style = new ShapeStyle { Stroke = new PdfColor(200, 30, 30), Width = 3 };
+                doc.AddShape(0, ShapeKind.Arrow, [new(60, 60), new(200, 120)], style);
+                int box = doc.AddShape(0, ShapeKind.Box, [new(60, 150), new(200, 220)], style with { Fill = new PdfColor(255, 235, 60) });
+                int ellipse = doc.AddShape(0, ShapeKind.Ellipse, [new(60, 250), new(200, 320)], style);
+                doc.AddShape(0, ShapeKind.Spline, [new(60, 350), new(100, 400), new(160, 340), new(220, 390)], style);
+                doc.SetShapeFill(0, [box], null);
+                doc.SetShapeFill(0, [ellipse], new PdfColor(30, 70, 200));
+                return doc;
+            }),
             ("page spread over sheets placed by hand", () =>
             {
                 using var doc = PdfDocument.Open(Fixture("word-style.pdf"));

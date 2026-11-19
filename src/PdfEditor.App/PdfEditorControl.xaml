@@ -58,6 +58,25 @@
                 <Button Content="Find &amp; replace" Click="FindReplace_Click" ToolTip="Replace text throughout the document; changed paragraphs re-flow (Ctrl+H)" />
             </StackPanel>
             <StackPanel Style="{StaticResource Group}">
+                <TextBlock Text="Draw:" VerticalAlignment="Center" Margin="4,0" />
+                <RadioButton Style="{DynamicResource ToolRadio}" GroupName="Tool" Content="Line" Tag="Line" Checked="Tool_Checked" ToolTip="Drag to draw a straight line. Shift keeps it level, upright or at 45 degrees" />
+                <RadioButton Style="{DynamicResource ToolRadio}" GroupName="Tool" Content="Arrow" Tag="Arrow" Checked="Tool_Checked" ToolTip="Drag to draw an arrow; it points where the drag ends" />
+                <RadioButton Style="{DynamicResource ToolRadio}" GroupName="Tool" Content="Box" Tag="Box" Checked="Tool_Checked" ToolTip="Drag to draw a box. Shift makes it square" />
+                <RadioButton Style="{DynamicResource ToolRadio}" GroupName="Tool" Content="Circle" Tag="Circle" Checked="Tool_Checked" ToolTip="Drag to draw a circle or oval. Shift keeps it round" />
+                <RadioButton Style="{DynamicResource ToolRadio}" GroupName="Tool" Content="Spline" Tag="Spline" Checked="Tool_Checked" ToolTip="Click point after point to draw a smooth curve through them; double-click or Enter finishes, Esc cancels" />
+                <Border Style="{DynamicResource ToolSeparator}" />
+                <ComboBox x:Name="LineColourBox" Width="90" ToolTip="Line colour for new shapes" />
+                <ComboBox x:Name="LineWidthBox" Width="68" SelectedIndex="1" ToolTip="Line thickness for new shapes, in points">
+                    <ComboBoxItem Content="1 pt" Tag="1" />
+                    <ComboBoxItem Content="2 pt" Tag="2" />
+                    <ComboBoxItem Content="3 pt" Tag="3" />
+                    <ComboBoxItem Content="5 pt" Tag="5" />
+                    <ComboBoxItem Content="8 pt" Tag="8" />
+                </ComboBox>
+                <TextBlock Text="Fill:" VerticalAlignment="Center" Margin="6,0,4,0" />
+                <ComboBox x:Name="FillBox" Width="90" ToolTip="Fill for new boxes, circles and splines. None leaves them see-through" />
+            </StackPanel>
+            <StackPanel Style="{StaticResource Group}">
                 <TextBlock Text="Text:" VerticalAlignment="Center" Margin="4,0" />
                 <ComboBox x:Name="FontBox" Width="80" SelectedIndex="0" ToolTip="Font for new text">
                     <ComboBoxItem Content="Sans" />

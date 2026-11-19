@@ -818,6 +818,64 @@ public class PdfDocumentTests
         Assert.Equal(grown.Bounds.Y, saved.GetTextRuns(0)[0].Bounds.Y, 0.5);
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(90)]
+    public void Shapes_are_drawn_as_vectors_and_can_be_filled_or_made_see_through(int rotation)
+    {
+        using var doc = PdfDocument.Create();
+        doc.AddPage(400, 600);
+        doc.SetPageRotation(0, rotation);
+        var red = new PdfColor(220, 0, 0);
+        var blue = new PdfColor(0, 0, 220);
+        var style = new ShapeStyle { Stroke = red, Width = 4 };
+
+        int line = doc.AddShape(0, ShapeKind.Line, [new(20, 20), new(120, 20)], style);
+        int arrow = doc.AddShape(0, ShapeKind.Arrow, [new(20, 60), new(120, 60)], style);
+        int box = doc.AddShape(0, ShapeKind.Box, [new(20, 100), new(120, 160)], style with { Fill = blue });
+        int ellipse = doc.AddShape(0, ShapeKind.Ellipse, [new(20, 200), new(120, 260)], style);
+        int spline = doc.AddShape(0, ShapeKind.Spline, [new(20, 300), new(60, 340), new(100, 300), new(140, 340)], style);
+        Assert.Equal([0, 1, 2, 3, 4], new[] { line, arrow, box, ellipse, spline });
+        Assert.Throws<ArgumentException>(() => doc.AddShape(0, ShapeKind.Line, [new(5, 5), new(5, 5)]));
+
+        // Where each was drawn, as seen, whichever way the page is turned.
+        using var saved = PdfDocument.Open(doc.ToBytes());
+        var drawings = saved.GetDrawings(0);
+        Assert.Equal(5, drawings.Count);
+        var boxBounds = drawings.Single(d => d.ObjectIndices.Contains(box)).Bounds;
+        // The line is 4 thick, so the box reaches 2 further out; PDFium allows a little more for the corners.
+        Assert.InRange(boxBounds.X, 15.5, 18.5);
+        Assert.InRange(boxBounds.Y, 95.5, 98.5);
+        Assert.InRange(boxBounds.Width, 103, 109);
+        Assert.InRange(boxBounds.Height, 63, 69);
+
+        PdfColor At(PdfDocument d, int x, int y)
+        {
+            var r = d.Render(0, 1, false);
+            int i = (y * r.Width + x) * 4;
+            return new PdfColor(r.Pixels[i + 2], r.Pixels[i + 1], r.Pixels[i]);
+        }
+        static bool Near(PdfColor a, PdfColor b) => Math.Abs(a.R - b.R) + Math.Abs(a.G - b.G) + Math.Abs(a.B - b.B) < 60;
+        var white = new PdfColor(255, 255, 255);
+        Assert.True(Near(At(saved, 70, 130), blue), "the box is filled");
+        Assert.True(Near(At(saved, 70, 100), red), "the box has its outline");
+        Assert.True(Near(At(saved, 70, 230), white), "the ellipse is see-through");
+        Assert.True(Near(At(saved, 120, 230), red), "the ellipse has its outline");
+        Assert.True(Near(At(saved, 70, 20), red), "the line is there");
+        Assert.True(Near(At(saved, 115, 60), red), "the arrow's head is solid");
+        Assert.True(Near(At(saved, 60, 340), red), "the spline passes through its points");
+
+        // Swap them: the box see-through, the ellipse and the spline filled. Lines and arrows take no fill.
+        Assert.Equal(1, saved.SetShapeFill(0, [box], null));
+        Assert.Equal(2, saved.SetShapeFill(0, [ellipse, spline, line, arrow], blue));
+        using var again = PdfDocument.Open(saved.ToBytes());
+        Assert.True(Near(At(again, 70, 130), white), "the box is see-through now");
+        Assert.True(Near(At(again, 70, 100), red), "the box keeps its outline");
+        Assert.True(Near(At(again, 70, 230), blue), "the ellipse is filled now");
+        Assert.True(Near(At(again, 70, 25), white), "the line took no fill");
+        Assert.True(Near(At(again, 115, 60), red), "the arrow's head keeps the line's colour");
+    }
+
     /// <summary>A green box, a red-to-blue gradient, and a "gradient" that is black all over (as some programs write a transparent one).</summary>
     internal static byte[] PdfWithGradients()
     {
