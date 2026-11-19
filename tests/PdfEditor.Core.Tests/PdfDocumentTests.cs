@@ -422,6 +422,34 @@ public class PdfDocumentTests
     }
 
     [Fact]
+    public void Resizing_an_image_keeps_its_orientation_on_a_rotated_page()
+    {
+        // A scan stored sideways: the image is placed on the page, then the page is turned, so the
+        // picture is shown rotated. Resizing must not turn it back upright.
+        using var doc = PdfDocument.Create();
+        doc.AddPage(400, 600);
+        doc.AddImage(0, Png, x: 100, y: 100, width: 200, height: 200); // red top-left, green top-right, blue bottom-left, white bottom-right
+        doc.SetPageRotation(0, 270);
+        var image = doc.GetImages(0).Single();
+        (int, int, int) Corner(PdfDocument d, PdfRect r, double fx, double fy)
+        {
+            var page = d.Render(0);
+            int i = (int)(r.Y + r.Height * fy) * page.Stride + (int)(r.X + r.Width * fx) * 4;
+            return (page.Pixels[i + 2] > 128 ? 1 : 0, page.Pixels[i + 1] > 128 ? 1 : 0, page.Pixels[i] > 128 ? 1 : 0);
+        }
+        var before = new[] { Corner(doc, image.Bounds, 0.25, 0.25), Corner(doc, image.Bounds, 0.75, 0.25), Corner(doc, image.Bounds, 0.25, 0.75), Corner(doc, image.Bounds, 0.75, 0.75) };
+        Assert.NotEqual((1, 0, 0), before[0]);              // turned: red is no longer at the top-left
+
+        var target = new PdfRect(image.Bounds.X + 20, image.Bounds.Y + 30, image.Bounds.Width * 0.5, image.Bounds.Height * 1.5);
+        doc.SetImageBounds(0, image.ObjectIndex, target);
+        using var saved = Reopen(doc);
+        var resized = saved.GetImages(0).Single().Bounds;
+        Assert.Equal(Round(target), Round(resized));
+        var after = new[] { Corner(saved, resized, 0.25, 0.25), Corner(saved, resized, 0.75, 0.25), Corner(saved, resized, 0.25, 0.75), Corner(saved, resized, 0.75, 0.75) };
+        Assert.Equal(before, after);                        // every quarter still shows the same colour
+    }
+
+    [Fact]
     public void Bad_input_gives_clear_errors()
     {
         Assert.Throws<PdfException>(() => PdfDocument.Open(new byte[] { 1, 2, 3, 4 }));

@@ -411,14 +411,27 @@ public sealed unsafe partial class PdfDocument
         page.Dirty = true;
     }
 
-    /// <summary>Moves and resizes an existing image to fill the given rectangle.</summary>
+    /// <summary>
+    /// Moves and resizes an existing image so that it fills the given rectangle. The image keeps
+    /// the orientation it has (a scan stored sideways on a rotated page stays as it looks).
+    /// </summary>
     public void SetImageBounds(int pageIndex, int objectIndex, PdfRect bounds)
     {
         if (bounds.Width <= 0 || bounds.Height <= 0) throw new ArgumentOutOfRangeException(nameof(bounds), "Image size must be positive.");
         using var page = OpenPage(pageIndex);
         var obj = GetObject(page, objectIndex, Native.PAGEOBJ_IMAGE, "image");
-        var m = Affine.Concat(new Affine(bounds.Width, 0, 0, -bounds.Height, bounds.X, bounds.Bottom), page.ViewToUser).ToNative();
-        Native.FPDFPageObj_SetMatrix(obj, &m);
+        var old = ObjectBounds(page, obj);
+        Native.FS_MATRIX m;
+        if (old.Width <= 0 || old.Height <= 0 || Native.FPDFPageObj_GetMatrix(obj, &m) == 0) throw new PdfException("Could not resize the image.");
+
+        // Stretch the image's present placement from its old rectangle onto the new one, working
+        // in view space. Building a fresh upright placement instead would drop any rotation or
+        // flip the image was stored with.
+        double sx = bounds.Width / old.Width, sy = bounds.Height / old.Height;
+        var stretch = new Affine(sx, 0, 0, sy, bounds.X - old.X * sx, bounds.Y - old.Y * sy);
+        var current = new Affine(m.a, m.b, m.c, m.d, m.e, m.f);
+        var placed = Affine.Concat(Affine.Concat(Affine.Concat(current, page.UserToView), stretch), page.ViewToUser).ToNative();
+        Native.FPDFPageObj_SetMatrix(obj, &placed);
         page.Dirty = page.ChangedExisting = true;
     }
 
