@@ -250,6 +250,14 @@ public class ConformanceTests(ITestOutputHelper output)
                 doc.AddWatermark(0, "DRAFT");
                 return doc;
             }),
+            ("text given another font and colour, and a block turned", () =>
+            {
+                var doc = PdfDocument.Open(Fixture("word-style.pdf"));
+                var runs = doc.GetTextRuns(0);
+                doc.FormatText(0, runs.Take(3).Select(r => r.ObjectIndex), new TextFormat { Font = StandardFont.Courier, Bold = true, Color = new PdfColor(30, 70, 200) });
+                doc.RotateObjects(0, doc.GetTextRuns(0).Skip(4).Take(3).Select(r => r.ObjectIndex), clockwise: true);
+                return doc;
+            }),
             ("Type 3 letters rebuilt as ordinary text", () =>
             {
                 var doc = PdfDocument.Open(PdfDocumentTests.PdfWithType3Letters());

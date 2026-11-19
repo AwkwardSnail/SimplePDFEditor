@@ -20,7 +20,7 @@ public partial class PdfEditorControl : UserControl
 {
     private enum Tool { Select, Text, Highlight, Comment, Line, Arrow, Box, Circle, Spline }
     private enum ItemKind { Text, Image, Annotation, Drawing }
-    private enum Drag { None, Move, Resize, Highlight, Shape }
+    private enum Drag { None, Move, Resize, Highlight, Shape, Band }
 
     /// <summary>What is currently selected on the page. Bounds are in page points.</summary>
     /// <summary>For a drawing, Index is its first shape and Group lists all of its shapes.</summary>
@@ -314,6 +314,8 @@ public partial class PdfEditorControl : UserControl
         foreach (var r in _highlightRects)
             AddRectangle(r, fill: new SolidColorBrush(ToColor(CurrentColour(HighlightBox), 120)), stroke: null);
 
+        if (_drag == Drag.Band)
+            AddRectangle(_dragBounds, fill: new SolidColorBrush(Color.FromArgb(30, 30, 144, 255)), stroke: Brushes.DodgerBlue, dashed: true);
         if (_selection is { } s)
         {
             var bounds = _drag is Drag.Move or Drag.Resize ? _dragBounds : s.Bounds;
@@ -668,7 +670,7 @@ public partial class PdfEditorControl : UserControl
         Tool.Box => "Drag to draw a box. Shift makes it square. Right-click a shape to fill it, make it see-through or delete it.",
         Tool.Circle => "Drag to draw a circle or oval. Shift keeps it round. Right-click a shape to fill it, make it see-through or delete it.",
         Tool.Spline => "Click point after point; the curve passes through each. Double-click or Enter finishes; Esc cancels.",
-        _ => "Click to select, drag to move, Delete to remove. Double-click a paragraph to rewrite it (it re-flows), or a comment to edit it.",
+        _ => "Click to select, drag to move, Delete to remove. Drag from empty paper to select several lines. Double-click a paragraph to rewrite it, or a comment to edit it.",
     };
 
     private TextStyle CurrentTextStyle()
@@ -781,9 +783,21 @@ public partial class PdfEditorControl : UserControl
             }
         }
 
+        // A press inside a block of selected lines moves the block.
+        if (clickCount < 2 && _selection is { Kind: ItemKind.Text, Group: not null } block && block.Bounds.Contains(p.X, p.Y))
+        {
+            StartDrag(Drag.Move, p, block.Bounds);
+            return;
+        }
+
         var hit = HitTest(p) ?? UngroupAt(p);
         Select(hit);
-        if (hit is null) return;
+        if (hit is null)
+        {
+            // On empty paper: drag out a box to select the lines of text it touches.
+            StartDrag(Drag.Band, p, new PdfRect(p.X, p.Y, 0, 0));
+            return;
+        }
 
         if (clickCount >= 2)
         {
@@ -848,10 +862,13 @@ public partial class PdfEditorControl : UserControl
             DrawOverlay();
             return;
         }
-        if (_drag == Drag.None || _selection is null && _drag is not (Drag.Highlight or Drag.Shape)) return;
+        if (_drag == Drag.None || _selection is null && _drag is not (Drag.Highlight or Drag.Shape or Drag.Band)) return;
         var p = PagePoint(e);
         switch (_drag)
         {
+            case Drag.Band:
+                _dragBounds = new PdfRect(Math.Min(p.X, _dragStart.X), Math.Min(p.Y, _dragStart.Y), Math.Abs(p.X - _dragStart.X), Math.Abs(p.Y - _dragStart.Y));
+                break;
             case Drag.Shape when _shape is { Count: 2 } ends:
                 ends[1] = Constrain(ends[0], new PdfPoint(p.X, p.Y));
                 break;
@@ -895,6 +912,12 @@ public partial class PdfEditorControl : UserControl
         Overlay.ReleaseMouseCapture();
         int page = _page;
 
+        if (drag == Drag.Band)
+        {
+            SelectTextIn(_dragBounds);
+            return;
+        }
+
         if (drag == Drag.Shape)
         {
             var points = _shape;
@@ -929,6 +952,29 @@ public partial class PdfEditorControl : UserControl
         else if (drag == Drag.Resize && Math.Abs(target.Width - s.Bounds.Width) > 0.5)
             Edit(d => d.SetImageBounds(page, s.Index, target));
         else DrawOverlay();
+    }
+
+    /// <summary>
+    /// Selects the pieces of text a dragged-out box touches, as one block that moves together.
+    /// Text spread over much of the page (a watermark) is taken only when it lies wholly inside.
+    /// </summary>
+    private void SelectTextIn(PdfRect area)
+    {
+        if (area.Width < 3 && area.Height < 3) { Select(null); return; } // a click, not a drag
+        double large = Overlay.Width * Overlay.Height / (ViewScale * ViewScale) * 0.2;
+        var touched = _runs.Where(r => r.Text.Trim().Length > 0
+            && r.Bounds.X < area.Right && r.Bounds.Right > area.X && r.Bounds.Y < area.Bottom && r.Bounds.Bottom > area.Y
+            && (r.Bounds.Width * r.Bounds.Height < large || r.Bounds.X >= area.X && r.Bounds.Right <= area.Right && r.Bounds.Y >= area.Y && r.Bounds.Bottom <= area.Bottom)).ToList();
+        if (touched.Count == 0) { Select(null); return; }
+        if (touched.Count == 1)
+        {
+            Select(new Selection(ItemKind.Text, touched[0].ObjectIndex, touched[0].Bounds));
+            return;
+        }
+        double left = touched.Min(r => r.Bounds.X), top = touched.Min(r => r.Bounds.Y);
+        var bounds = new PdfRect(left, top, touched.Max(r => r.Bounds.Right) - left, touched.Max(r => r.Bounds.Bottom) - top);
+        Select(new Selection(ItemKind.Text, touched[0].ObjectIndex, bounds, touched.Select(r => r.ObjectIndex).ToList()));
+        ShowStatus($"{touched.Count} pieces of text selected. Drag to move them together, Delete to remove them, right-click for font, colour and turning.");
     }
 
     // ------------------------------------------------------------------ drawing shapes
@@ -1065,17 +1111,40 @@ public partial class PdfEditorControl : UserControl
         Add("Move one layer down", false);
     }
 
-    /// <summary>A right-click on text offers to move it a layer up or down, or delete it.</summary>
+    /// <summary>
+    /// A right-click on text offers a new font and colour, turning, a move up or down a layer,
+    /// and deleting. With a block of lines selected, it acts on the whole block.
+    /// </summary>
     private void ShowTextMenu(Selection text)
     {
         Focus();
-        Select(text);
+        if (_selection is { Kind: ItemKind.Text, Group: { } chosen } block && chosen.Contains(text.Index)) text = block; // keep the block
+        else Select(text);
+        int page = _page;
+        IReadOnlyList<int> pieces = text.Group ?? [text.Index];
+
         var menu = new ContextMenu { PlacementTarget = Overlay };
-        AddLayerItems(menu, [text.Index]);
+        void Add(string header, Action action)
+        {
+            var item = new MenuItem { Header = header };
+            item.Click += (_, _) => action();
+            menu.Items.Add(item);
+        }
+        Add("Font and colour...", () =>
+        {
+            var sample = _runs.FirstOrDefault(r => pieces.Contains(r.ObjectIndex));
+            if (sample is null || ShapeDialogs.AskText(this, sample, pieces.Count) is not { } format) return;
+            _selection = null;
+            int changed = 0;
+            if (Edit(d => changed = d.FormatText(page, pieces, format)))
+                ShowStatus(changed == 0 ? "Nothing changed: this text already looks that way." : "The text has its new look. Undo brings the old one back.");
+        });
+        Add("Rotate right", () => { _selection = null; Edit(d => d.RotateObjects(page, pieces, clockwise: true)); });
+        Add("Rotate left", () => { _selection = null; Edit(d => d.RotateObjects(page, pieces, clockwise: false)); });
         menu.Items.Add(new Separator());
-        var delete = new MenuItem { Header = "Delete" };
-        delete.Click += (_, _) => DeleteSelection();
-        menu.Items.Add(delete);
+        AddLayerItems(menu, pieces);
+        menu.Items.Add(new Separator());
+        Add("Delete", DeleteSelection);
         menu.IsOpen = true;
     }
 
@@ -1533,6 +1602,8 @@ public partial class PdfEditorControl : UserControl
         if (image is null)
         {
             if (ShowGradientMenu(p)) { e.Handled = true; return; }
+            // Anywhere inside a block of selected lines is a right-click on the block.
+            if (_selection is { Kind: ItemKind.Text, Group: not null } block && block.Bounds.Contains(p.X, p.Y)) { ShowTextMenu(block); e.Handled = true; return; }
             if (HitTest(p) is { Kind: ItemKind.Text } text) { ShowTextMenu(text); e.Handled = true; return; }
             e.Handled = ShowDrawingMenu(p);
             return;

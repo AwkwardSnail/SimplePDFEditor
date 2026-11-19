@@ -219,9 +219,9 @@ public sealed unsafe partial class PdfDocument
         : Core.StandardFont.Helvetica;
 
     /// <summary>A standard-font look-alike of a style, with the same size, transform and colour.</summary>
-    private StyleRef StandardLookAlike(StyleRef s, bool? bold = null, bool? italic = null)
+    private StyleRef StandardLookAlike(StyleRef s, bool? bold = null, bool? italic = null, StandardFont? family = null)
     {
-        var style = new TextStyle { Font = FamilyOf(s.DisplayName), Bold = bold ?? s.Bold, Italic = italic ?? s.Italic };
+        var style = new TextStyle { Font = family ?? FamilyOf(s.DisplayName), Bold = bold ?? s.Bold, Italic = italic ?? s.Italic };
         string name = StandardFontName(style);
         // A sheared (synthetic italic) transform plus an italic font would slant twice.
         var matrix = style.Italic && Math.Abs(s.Matrix.C) > 0.05 * Math.Abs(s.Matrix.D) ? s.Matrix with { C = 0 } : s.Matrix;
@@ -250,8 +250,8 @@ public sealed unsafe partial class PdfDocument
     private StyleRef Reformat(PageHandle page, StyleRef s, TextFormat f)
     {
         var result = s;
-        if (f.Bold is { } bold && bold != s.Bold || f.Italic is { } italic && italic != s.Italic)
-            result = StandardLookAlike(s, f.Bold, f.Italic);
+        if (f.Bold is { } bold && bold != s.Bold || f.Italic is { } italic && italic != s.Italic || f.Font is { } family && family != FamilyOf(s.DisplayName))
+            result = StandardLookAlike(s, f.Bold, f.Italic, f.Font);
         if (f.Size is { } size)
         {
             if (size <= 0) throw new ArgumentOutOfRangeException(nameof(f), "Font size must be positive.");

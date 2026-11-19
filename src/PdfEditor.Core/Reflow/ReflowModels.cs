@@ -33,6 +33,8 @@ public sealed record TextFormat
     /// <summary>Visible size in points.</summary>
     public double? Size { get; init; }
     public PdfColor? Color { get; init; }
+    /// <summary>The family of standard font to set the text in (sans, serif or mono); null keeps the font it has.</summary>
+    public StandardFont? Font { get; init; }
 }
 
 public sealed record ReflowOptions

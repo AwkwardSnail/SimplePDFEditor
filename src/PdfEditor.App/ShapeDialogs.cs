@@ -119,6 +119,62 @@ internal static class ShapeDialogs
         return done ? result : null;
     }
 
+    /// <summary>
+    /// Asks for a new look for one or more pieces of text. Only what is changed in the dialog is
+    /// set in the result, so whatever is left alone stays as it is. Null when cancelled or when
+    /// nothing was changed.
+    /// </summary>
+    public static TextFormat? AskText(DependencyObject owner, TextRun sample, int pieces)
+    {
+        var window = Dialog(owner, pieces > 1 ? $"Font and colour ({pieces} pieces of text)" : "Font and colour");
+        var font = new ComboBox { Width = 170 };
+        foreach (string name in new[] { "As it is", "Sans (Helvetica)", "Serif (Times)", "Mono (Courier)" }) font.Items.Add(new ComboBoxItem { Content = name });
+        font.SelectedIndex = 0;
+        var size = new TextBox { Width = 60 };
+        var points = new TextBlock { Text = "pt  (empty: as it is)", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0), Opacity = 0.65 };
+        bool wasBold = System.Text.RegularExpressions.Regex.IsMatch(sample.FontName, "Bold|Black|Heavy|Semibold|Demi", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        bool wasItalic = System.Text.RegularExpressions.Regex.IsMatch(sample.FontName, "Italic|Oblique", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        var bold = new CheckBox { Content = "Bold", IsChecked = wasBold, Margin = new Thickness(0, 0, 14, 0) };
+        var italic = new CheckBox { Content = "Italic", IsChecked = wasItalic };
+        var colour = ColourBox(null, "As it is");
+
+        var panel = new StackPanel();
+        panel.Children.Add(Row(Label("Font"), font));
+        panel.Children.Add(Row(Label("Size"), size, points));
+        panel.Children.Add(Row(Label("Style"), bold, italic));
+        panel.Children.Add(Row(Label("Colour"), colour));
+        panel.Children.Add(new TextBlock
+        {
+            Text = "A change of font, bold or italic sets the text in a standard font, so its letters may look a little different.",
+            TextWrapping = TextWrapping.Wrap, MaxWidth = 300, Opacity = 0.65, HorizontalAlignment = HorizontalAlignment.Left,
+        });
+        TextFormat? result = null;
+        bool done = Run(window, panel, "OK", () =>
+        {
+            double? newSize = null;
+            if (size.Text.Trim().Length > 0)
+            {
+                if (!TryParse(size.Text, out double s) || s < 2 || s > 1000)
+                {
+                    MessageBox.Show(window, "Enter a size between 2 and 1000 points, or leave it empty.", window.Title, MessageBoxButton.OK, MessageBoxImage.Information);
+                    return false;
+                }
+                newSize = s;
+            }
+            result = new TextFormat
+            {
+                Font = font.SelectedIndex switch { 1 => StandardFont.Helvetica, 2 => StandardFont.Times, 3 => StandardFont.Courier, _ => null },
+                Size = newSize,
+                Bold = bold.IsChecked == wasBold ? null : bold.IsChecked == true,
+                Italic = italic.IsChecked == wasItalic ? null : italic.IsChecked == true,
+                Color = colour.SelectedItem is ComboBoxItem { Tag: PdfColor c } ? c : null,
+            };
+            return true;
+        }, font);
+        if (!done || result is null) return null;
+        return result is { Font: null, Size: null, Bold: null, Italic: null, Color: null } ? null : result;
+    }
+
     /// <summary>Asks for a watermark: its words, look, and whether it goes on every page. Null when cancelled.</summary>
     public static (string Text, WatermarkOptions Options, bool EveryPage)? AskWatermark(DependencyObject owner, int pageCount)
     {

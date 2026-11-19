@@ -1047,6 +1047,72 @@ public class PdfDocumentTests
         Assert.Empty(again.GetImages(0));
     }
 
+    [Fact]
+    public void Whole_pieces_of_text_can_be_given_another_font_weight_size_and_colour()
+    {
+        using var doc = PdfDocument.Create();
+        doc.AddPage(400, 400);
+        doc.AddText(0, 50, 50, "Hello world", new TextStyle { Size = 12 });
+        doc.AddText(0, 50, 90, "Second line", new TextStyle { Size = 12 });
+        var before = doc.GetTextRuns(0);
+        var red = new PdfColor(200, 30, 30);
+
+        // Colour alone keeps the font.
+        Assert.Equal(2, doc.FormatText(0, before.Select(r => r.ObjectIndex), new TextFormat { Color = red }));
+        Assert.All(doc.GetTextRuns(0), r => Assert.Equal(("Helvetica", red), (r.FontName, r.Color)));
+
+        // Serif, bold and italic, and half as big again, for the first line only.
+        Assert.Equal(1, doc.FormatText(0, [before[0].ObjectIndex], new TextFormat { Font = StandardFont.Times, Bold = true, Italic = true, Size = 18 }));
+        using var saved = PdfDocument.Open(doc.ToBytes());
+        var runs = saved.GetTextRuns(0);
+        Assert.Equal(2, runs.Count);
+        var first = runs.Single(r => r.Text.Trim() == "Hello world");
+        var second = runs.Single(r => r.Text.Trim() == "Second line");
+        Assert.Equal("Times-BoldItalic", first.FontName);
+        Assert.Equal(red, first.Color);
+        Assert.Equal(before[0].Bounds.X, first.Bounds.X, 2.5);           // it starts where it started (a slanted H leans a little to the left)
+        Assert.Equal(before[0].Bounds.Bottom, first.Bounds.Bottom, 3.0);   // on the same baseline
+        Assert.InRange(first.Bounds.Height / before[0].Bounds.Height, 1.3, 1.7);
+        Assert.Equal("Helvetica", second.FontName);
+        Assert.Equal(before[1].Bounds.Width, second.Bounds.Width, 0.5);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(90)]
+    public void A_block_of_items_turns_a_quarter_turn_about_its_middle(int pageRotation)
+    {
+        using var doc = PdfDocument.Create();
+        doc.AddPage(400, 400);
+        doc.SetPageRotation(0, pageRotation);
+        doc.AddText(0, 100, 100, "First line of the block", new TextStyle { Size = 12 });
+        doc.AddText(0, 100, 120, "Second", new TextStyle { Size = 12 });
+        var runs = doc.GetTextRuns(0);
+        PdfRect Block(IReadOnlyList<TextRun> r) => new(r.Min(x => x.Bounds.X), r.Min(x => x.Bounds.Y),
+            r.Max(x => x.Bounds.Right) - r.Min(x => x.Bounds.X), r.Max(x => x.Bounds.Bottom) - r.Min(x => x.Bounds.Y));
+        var was = Block(runs);
+
+        doc.RotateObjects(0, runs.Select(r => r.ObjectIndex), clockwise: true);
+        using var saved = PdfDocument.Open(doc.ToBytes());
+        var turned = saved.GetTextRuns(0);
+        Assert.Equal(["First line of the block", "Second"], turned.Select(r => r.Text.Trim()).ToArray());
+        var now = Block(turned);
+        // Width and height change places; the middle stays where it was.
+        Assert.Equal(was.Width, now.Height, 1);
+        Assert.Equal(was.Height, now.Width, 1);
+        Assert.Equal(was.X + was.Width / 2, now.X + now.Width / 2, 1);
+        Assert.Equal(was.Y + was.Height / 2, now.Y + now.Height / 2, 1);
+        // Clockwise: the first line, which was on top, is now on the right; both lines start at the top.
+        Assert.True(turned[0].Bounds.X > turned[1].Bounds.X, "the first line is to the right of the second");
+        Assert.Equal(turned[0].Bounds.Y, turned[1].Bounds.Y, 1.5);
+
+        // And back again.
+        saved.RotateObjects(0, turned.Select(r => r.ObjectIndex), clockwise: false);
+        var back = Block(saved.GetTextRuns(0));
+        Assert.Equal(was.X, back.X, 1);
+        Assert.Equal(was.Width, back.Width, 1);
+    }
+
     private static int PixelsThatDiffer(RenderedPage a, RenderedPage b, PdfRect area)
     {
         int changed = 0;
