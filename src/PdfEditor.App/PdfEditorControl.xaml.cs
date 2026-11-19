@@ -67,17 +67,27 @@ public partial class PdfEditorControl : UserControl
 
     /// <summary>File name of the open document, with a star when it has unsaved changes.</summary>
     public string DocumentTitle =>
-        (_session.FilePath is null ? "Untitled" : Path.GetFileName(_session.FilePath)) + (_session.IsModified ? " *" : "");
+        (_session.FilePath is null ? _session.SuggestedFileName : Path.GetFileName(_session.FilePath)) + (_session.IsModified ? " *" : "");
 
     public event EventHandler? TitleChanged;
 
-    /// <summary>Opens a PDF, first offering to save unsaved changes. Returns false if nothing was opened.</summary>
+    /// <summary>
+    /// Opens a PDF, or turns an RTF document into a new PDF, first offering to save unsaved
+    /// changes. Returns false if nothing was opened.
+    /// </summary>
     public bool OpenFile(string path)
     {
         if (!ConfirmDiscardChanges()) return false;
         EditorSession? opened = null;
         try
         {
+            if (IsRtf(path))
+            {
+                opened = EditorSession.FromRtf(path, out var result);
+                ReplaceSession(opened);
+                ReportImport(result, Path.GetFileName(path));
+                return true;
+            }
             try { opened = EditorSession.Open(path); }
             catch (PdfException e) when (e.Message.Contains("password", StringComparison.OrdinalIgnoreCase))
             {
@@ -100,7 +110,7 @@ public partial class PdfEditorControl : UserControl
     {
         CommitEditor();
         if (!_session.IsModified) return true;
-        string name = _session.FilePath is null ? "this document" : Path.GetFileName(_session.FilePath);
+        string name = _session.FilePath is null ? _session.SuggestedFileName : Path.GetFileName(_session.FilePath);
         return MessageBox.Show(Window.GetWindow(this), $"Save changes to {name}?", "PDF Editor", MessageBoxButton.YesNoCancel, MessageBoxImage.Question) switch
         {
             MessageBoxResult.Yes => Save(saveAs: false),
@@ -151,7 +161,7 @@ public partial class PdfEditorControl : UserControl
         string? path = _session.FilePath;
         if (saveAs || path is null)
         {
-            var dialog = new SaveFileDialog { Filter = "PDF files|*.pdf", DefaultExt = ".pdf", FileName = path is null ? "Untitled.pdf" : Path.GetFileName(path) };
+            var dialog = new SaveFileDialog { Filter = "PDF files|*.pdf", DefaultExt = ".pdf", FileName = path is null ? _session.SuggestedFileName : Path.GetFileName(path) };
             if (path is not null) dialog.InitialDirectory = Path.GetDirectoryName(path);
             if (dialog.ShowDialog(Window.GetWindow(this)) != true) return false;
             path = dialog.FileName;
@@ -304,7 +314,7 @@ public partial class PdfEditorControl : UserControl
 
     private void Open_Click(object sender, RoutedEventArgs e)
     {
-        var dialog = new OpenFileDialog { Filter = "PDF files|*.pdf|All files|*.*" };
+        var dialog = new OpenFileDialog { Filter = "PDF or RTF|*.pdf;*.rtf|PDF files|*.pdf|Rich text (RTF)|*.rtf|All files|*.*" };
         if (dialog.ShowDialog(Window.GetWindow(this)) == true) OpenFile(dialog.FileName);
     }
 
@@ -335,17 +345,25 @@ public partial class PdfEditorControl : UserControl
         if (!Edit(d => d.AddPage(size.Width, size.Height, at))) { _page = at - 1; RefreshAll(); }
     }
 
-    private void InsertPdf_Click(object sender, RoutedEventArgs e)
+    private void InsertFile_Click(object sender, RoutedEventArgs e)
     {
         CommitEditor();
-        var dialog = new OpenFileDialog { Filter = "PDF files|*.pdf", Title = "Insert pages from" };
+        var dialog = new OpenFileDialog { Filter = "PDF or RTF|*.pdf;*.rtf|PDF files|*.pdf|Rich text (RTF)|*.rtf", Title = "Insert pages from" };
         if (dialog.ShowDialog(Window.GetWindow(this)) != true) return;
         try
         {
-            using var other = PdfDocument.Open(dialog.FileName);
             int at = _page + 1;
             _selection = null;
             _page = at;
+            if (IsRtf(dialog.FileName))
+            {
+                byte[] rtf = File.ReadAllBytes(dialog.FileName);
+                RtfImportResult? result = null;
+                if (!Edit(d => result = d.ImportRtf(rtf, at))) { _page = at - 1; RefreshAll(); return; }
+                ReportImport(result!, Path.GetFileName(dialog.FileName));
+                return;
+            }
+            using var other = PdfDocument.Open(dialog.FileName);
             if (!Edit(d => d.ImportPages(other, index: at))) { _page = at - 1; RefreshAll(); }
         }
         catch (Exception ex)
@@ -762,6 +780,18 @@ public partial class PdfEditorControl : UserControl
 
     private void ShowStatus(string message) => HintText.Text = message;
 
+    private static bool IsRtf(string path) => path.EndsWith(".rtf", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Says how an RTF import went, and what was left out.</summary>
+    private void ReportImport(RtfImportResult result, string name)
+    {
+        string pages = $"{result.PageCount} page{(result.PageCount == 1 ? "" : "s")}";
+        ShowStatus($"{name} was laid out as {pages}. Double-click a paragraph to edit it.");
+        if (result.Warnings.Count > 0)
+            MessageBox.Show(Window.GetWindow(this), $"{name} was imported as {pages}, but not everything could be brought across:\n\n• " + string.Join("\n• ", result.Warnings),
+                "PDF Editor", MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
     private static StandardFont FamilyOf(string fontName) =>
         fontName.Contains("Courier", StringComparison.OrdinalIgnoreCase) || fontName.Contains("Mono", StringComparison.OrdinalIgnoreCase) ? StandardFont.Courier
         : (fontName.Contains("Times", StringComparison.OrdinalIgnoreCase) || fontName.Contains("Serif", StringComparison.OrdinalIgnoreCase))
@@ -921,7 +951,7 @@ public partial class PdfEditorControl : UserControl
     private void OnDrop(object sender, DragEventArgs e)
     {
         if (e.Data.GetData(DataFormats.FileDrop) is string[] { Length: > 0 } files &&
-            files[0].EndsWith(".pdf", StringComparison.OrdinalIgnoreCase))
+            (files[0].EndsWith(".pdf", StringComparison.OrdinalIgnoreCase) || IsRtf(files[0])))
             OpenFile(files[0]);
     }
 

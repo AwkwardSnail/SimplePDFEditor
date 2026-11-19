@@ -15,7 +15,7 @@
             </ToolBar>
             <ToolBar Band="0" BandIndex="1">
                 <Button Content="Add page" Click="AddPage_Click" ToolTip="Add a blank page after this one" />
-                <Button Content="Insert PDF" Click="InsertPdf_Click" ToolTip="Insert the pages of another PDF after this page" />
+                <Button Content="Insert file" Click="InsertFile_Click" ToolTip="Insert the pages of a PDF, or an RTF document laid out as pages, after this page" />
                 <Button x:Name="DeletePageButton" Content="Delete page" Click="DeletePage_Click" ToolTip="Delete this page" />
                 <Button Content="Rotate" Click="Rotate_Click" ToolTip="Rotate this page a quarter turn clockwise" />
                 <Button x:Name="PageUpButton" Content="Move up" Click="MovePageUp_Click" ToolTip="Move this page earlier" />

@@ -303,6 +303,30 @@ public sealed unsafe partial class PdfDocument
         }
     }
 
+    /// <summary>Places a PNG/JPEG/BMP/GIF image into a rectangle (view space) on an open page.</summary>
+    internal void DrawImage(PageHandle page, byte[] imageData, double x, double y, double width, double height)
+    {
+        var obj = Native.FPDFPageObj_NewImageObj(Doc);
+        if (obj == IntPtr.Zero) throw new PdfException("Could not create the image.");
+        try
+        {
+            if (imageData.Length > 3 && imageData[0] == 0xFF && imageData[1] == 0xD8) LoadJpeg(page, obj, imageData);
+            else
+            {
+                var decoded = ImageResult.FromMemory(imageData, ColorComponents.RedGreenBlueAlpha);
+                var bgra = decoded.Data;
+                for (int i = 0; i < bgra.Length; i += 4) (bgra[i], bgra[i + 2]) = (bgra[i + 2], bgra[i]);
+                SetPixels(page, obj, bgra, decoded.Width, decoded.Height);
+            }
+            PlaceImage(page, obj, x, y, width, height);
+        }
+        catch
+        {
+            Native.FPDFPageObj_Destroy(obj);
+            throw;
+        }
+    }
+
     /// <summary>Places an image given as top-down BGRA pixels (4 bytes per pixel).</summary>
     public void AddImage(int pageIndex, byte[] bgraPixels, int pixelWidth, int pixelHeight, double x, double y, double? width = null, double? height = null)
     {

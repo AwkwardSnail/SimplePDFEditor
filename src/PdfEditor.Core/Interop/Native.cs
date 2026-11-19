@@ -76,6 +76,13 @@ internal static unsafe class Native
     [DllImport(Lib)] public static extern int FPDFClipPath_CountPathSegments(IntPtr clip, int pathIndex);
     [DllImport(Lib)] public static extern IntPtr FPDFClipPath_GetPathSegment(IntPtr clip, int pathIndex, int segmentIndex);
     [DllImport(Lib)] public static extern int FPDFPathSegment_GetPoint(IntPtr segment, float* x, float* y);
+    [DllImport(Lib)] public static extern IntPtr FPDFPageObj_CreateNewPath(float x, float y);
+    [DllImport(Lib)] public static extern IntPtr FPDFPageObj_CreateNewRect(float x, float y, float w, float h);
+    [DllImport(Lib)] public static extern int FPDFPath_LineTo(IntPtr path, float x, float y);
+    [DllImport(Lib)] public static extern int FPDFPath_SetDrawMode(IntPtr path, int fillMode, int stroke);
+    [DllImport(Lib)] public static extern int FPDFPageObj_SetStrokeWidth(IntPtr obj, float width);
+    [DllImport(Lib)] public static extern int FPDFFont_GetAscent(IntPtr font, float size, float* ascent);
+    [DllImport(Lib)] public static extern int FPDFFont_GetDescent(IntPtr font, float size, float* descent);
     [DllImport(Lib)] public static extern int FPDFPage_RemoveObject(IntPtr page, IntPtr obj);
     [DllImport(Lib)] public static extern int FPDFPage_CountObjects(IntPtr page);
     [DllImport(Lib)] public static extern IntPtr FPDFPage_GetObject(IntPtr page, int index);

@@ -337,6 +337,10 @@ internal sealed unsafe class PageAnalysis
             double gap = b.Baseline - a.Baseline;
             if (Math.Abs(a.Em - b.Em) > 0.1 * a.Em || gap < 0.7 * a.Em || gap > 2.2 * a.Em) continue;
             if (b.Right < a.Left || b.Left > a.Right) continue;
+            // Only count lines that clearly wrapped (the next word did not fit): their gap is line
+            // spacing, not the space between two paragraphs.
+            double columnRight = lines.Where(l => Math.Abs(l.Left - a.Left) < 2 * a.Em).Max(l => l.Right);
+            if (a.Right + a.Glyphs[^1].Style.Advance(' ') + b.FirstWordWidth() < columnRight - 0.3 * a.Em) continue;
             gaps.Add((Math.Round(a.Em * 2) / 2, gap));
         }
         foreach (var size in gaps.GroupBy(g => g.Size))
@@ -355,7 +359,7 @@ internal sealed unsafe class PageAnalysis
         Mode mode = Mode.Unknown;
         foreach (var line in lines)
         {
-            if (current is not null && Continues(current, ref mode, line, TypicalGap(line.Em)))
+            if (current is not null && Continues(current, ref mode, line, TypicalGap(line.Em), ColumnRight(lines, current.Lines[^1]), PageRight(lines, current.Lines[^1])))
             {
                 current.Lines.Add(line);
                 current.JoinedAs = mode switch { Mode.Center => TextAlignment.Center, Mode.Right => TextAlignment.Right, _ => TextAlignment.Left };
@@ -369,7 +373,21 @@ internal sealed unsafe class PageAnalysis
     }
 
     /// <summary>Decides whether a line carries on the paragraph above it.</summary>
-    private static bool Continues(Paragraph p, ref Mode mode, Line l, double? typicalGap)
+    /// <summary>How far right lines that start where this one does reach: the column's right edge.</summary>
+    private static double ColumnRight(List<Line> lines, Line line) =>
+        lines.Where(l => Math.Abs(l.Left - line.Left) < 2 * line.Em && l.Em <= 1.2 * line.Em).Max(l => l.Right);
+
+    /// <summary>
+    /// The right edge of the page's text area (margins assumed equal), or null when other text
+    /// sits beside the line, so the page has columns.
+    /// </summary>
+    private double? PageRight(List<Line> lines, Line line)
+    {
+        bool beside = lines.Any(r => r.Left > line.Right + line.Em && Math.Abs(r.Baseline - line.Baseline) < 20 * line.Em);
+        return beside ? null : Page.Width - Math.Max(18, lines.Min(l => l.Left));
+    }
+
+    private static bool Continues(Paragraph p, ref Mode mode, Line l, double? typicalGap, double columnRight, double? pageRight)
     {
         var q = p.Lines[^1];
         double em = Line.Mode(p.Lines.Select(x => x.Em), 0.05);
@@ -412,9 +430,14 @@ internal sealed unsafe class PageAnalysis
         double slack = 0.3 * em;
         bool hadRoom = lineMode switch
         {
-            Mode.Left => q.Right + space + word < Math.Max(p.Lines.Max(x => x.Right), l.Right) - slack,
+            Mode.Left => q.Right + space + word < Math.Max(Math.Max(p.Lines.Max(x => x.Right), l.Right), columnRight) - slack,
             _ => q.Width + space + word < widest - slack,
         };
+        // A finished sentence with room to spare before the page's margin, followed by a capital,
+        // also ends a paragraph (a run of one-line paragraphs gives no other clue).
+        if (!hadRoom && lineMode == Mode.Left && pageRight is { } edge && q.Right + space + word < edge - slack
+            && q.Glyphs[^1].Ch is '.' or '!' or '?' or ':' && (char.IsUpper(l.Glyphs[0].Ch) || char.IsDigit(l.Glyphs[0].Ch)))
+            hadRoom = true;
         if (hadRoom) return false;
 
         mode = lineMode;

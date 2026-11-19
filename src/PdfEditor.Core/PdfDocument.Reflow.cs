@@ -204,7 +204,7 @@ public sealed unsafe partial class PdfDocument
     // ------------------------------------------------------------------ fonts
 
     /// <summary>A standard font handle (Helvetica, Times, Courier and their variants), loaded once per document.</summary>
-    private IntPtr StandardFontHandle(string name)
+    internal IntPtr StandardFontHandle(string name)
     {
         if (_standardFonts.TryGetValue(name, out var font)) return font;
         font = Native.FPDFText_LoadStandardFont(Doc, name);

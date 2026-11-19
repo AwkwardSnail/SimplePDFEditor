@@ -4,7 +4,7 @@ A PDF editor in C# for The Awkward Snail.
 
 ## Layout
 
-- `src/PdfEditor.Core` – the editing engine (no UI). Built on [PDFium](https://pdfium.googlesource.com/pdfium/) (BSD/Apache licensed) through its native packages for Windows, Linux and macOS.
+- `src/PdfEditor.Core` – the editing engine (no UI), including paragraph reflow (`Reflow/`) and RTF import (`Rtf/`). Built on [PDFium](https://pdfium.googlesource.com/pdfium/) (BSD/Apache licensed) through its native packages for Windows, Linux and macOS.
 - `src/PdfEditor.App` – the Windows desktop editor (WPF). The whole editor lives in `PdfEditorControl`, so it can be dropped into another WPF window; `MainWindow` is a thin shell around it.
 - `tests/PdfEditor.Core.Tests` – xUnit tests for the engine.
 
@@ -51,6 +51,26 @@ Lines are grouped into a paragraph when they share a text size and the page's us
 
 **Keeping the rest of the page intact.** When an existing object changes, PDFium rewrites the page's original content and drops word and character spacing on the way, which would shift justified text elsewhere on the page. Before that happens, any text that depends on those settings is redrawn with each character pinned where it was. This also protects the editor's move, resize, delete and edit-text operations.
 
+## Importing RTF
+
+RTF documents (from Word, WordPad, LibreOffice and others) are laid out as PDF pages. The pages are ordinary editable PDF content, so imported paragraphs can be edited with reflow straight away.
+
+```csharp
+using var doc = PdfDocument.FromRtf(File.ReadAllBytes("notes.rtf"), out var result);
+foreach (var warning in result.Warnings) Console.WriteLine(warning);   // what could not be brought across
+doc.Save("notes.pdf");
+
+existing.ImportRtf("appendix.rtf", index: 3);                         // or insert into a PDF that is open
+```
+
+**Brought across:** page size and margins; fonts, sizes, bold, italic, underline, strikethrough, colours, highlighting, superscript and subscript; alignment (including justified), indents, space before and after, line spacing, tab stops; bulleted and numbered lists; tables with borders; PNG and JPEG pictures; page and section breaks; Unicode and code-page text (including Cyrillic, Greek and other scripts).
+
+**Left out (and reported in `Warnings`):** headers and footers, WMF/EMF pictures, tables inside tables (flattened). Footnotes, comments, fields' codes and drawing objects are skipped silently.
+
+**Fonts.** By default the standard PDF fonts are used (Times, Helvetica, Courier, chosen to match each RTF font's family): small files that look the same everywhere. Text those fonts cannot show (for example Cyrillic or Greek) is drawn in a matching installed font, which is embedded. `new RtfImportOptions { EmbedFonts = true }` embeds the installed fonts the RTF names (Calibri, Georgia, ...) for a closer look; PDFium embeds whole font files, so this makes much larger PDFs.
+
+Line breaks are worked out by this library, so they can differ slightly from the word processor's.
+
 ## Running the editor (Windows)
 
 Needs the .NET 8 SDK (or Visual Studio 2022 with the ".NET desktop development" workload).
@@ -72,6 +92,8 @@ or open `PdfEditor.sln` in Visual Studio and run `PdfEditor.App`. A PDF path on 
 | **Image** | Pick an image file; it is placed in the middle of the page, ready to drag and resize. |
 
 **Find & replace** (Ctrl+H) replaces text throughout the document and re-flows each paragraph it changes.
+
+**Open** also accepts RTF files: the document is laid out as a new PDF (named after the RTF file, not saved until you save it). **Insert file** adds the pages of a PDF or an RTF document after the current page. Anything that could not be imported is listed after the import.
 
 Page buttons add a blank page, insert another PDF's pages, delete, rotate and reorder the current page. Undo/redo (Ctrl+Z / Ctrl+Y) covers every change. Ctrl+mouse wheel zooms.
 
@@ -113,6 +135,6 @@ dotnet test tests/PdfEditor.Core.Tests
 
 The engine tests run on Windows, Linux and macOS. The app itself only runs on Windows.
 
-The reflow tests read PDFs in `tests/PdfEditor.Core.Tests/Fixtures`, made by `make_fixtures.py` there (python-docx, reportlab and LibreOffice): a Word-style document exported by LibreOffice with subset-embedded fonts, and a two-column document justified with word spacing.
+The reflow and RTF tests read files in `tests/PdfEditor.Core.Tests/Fixtures`, made by `make_fixtures.py` there (python-docx, reportlab and LibreOffice): a Word-style document exported by LibreOffice with subset-embedded fonts, a two-column document justified with word spacing, and a Word document saved as RTF by LibreOffice.
 
 PDFium is not thread-safe, even across separate documents: use the library from one thread at a time.

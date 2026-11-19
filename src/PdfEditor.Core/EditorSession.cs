@@ -13,6 +13,8 @@ public sealed class EditorSession : IDisposable
 
     public PdfDocument Document { get; private set; }
     public string? FilePath { get; private set; }
+    /// <summary>A file name to offer when the document has no file yet (for example "Notes.pdf" for an imported "Notes.rtf").</summary>
+    public string SuggestedFileName { get; private set; } = "Untitled.pdf";
     public bool IsModified { get; private set; }
     public bool CanUndo => _undo.Count > 0;
     public bool CanRedo => _redo.Count > 0;
@@ -36,6 +38,13 @@ public sealed class EditorSession : IDisposable
 
     public static EditorSession Open(string path, string? password = null) =>
         new(PdfDocument.Open(path, password), Path.GetFullPath(path));
+
+    /// <summary>A new, unsaved PDF made from an RTF file.</summary>
+    public static EditorSession FromRtf(string path, out RtfImportResult result, RtfImportOptions? options = null)
+    {
+        var doc = PdfDocument.FromRtf(File.ReadAllBytes(path), out result, options);
+        return new EditorSession(doc, null) { SuggestedFileName = Path.ChangeExtension(Path.GetFileName(path), ".pdf"), IsModified = true };
+    }
 
     /// <summary>Runs an edit as one undoable step. If the edit throws, the document is left as it was.</summary>
     public void Apply(Action<PdfDocument> edit)

@@ -29,6 +29,7 @@
 
   <ItemGroup>
     <None Include="Fixtures\*.pdf" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Fixtures\*.rtf" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

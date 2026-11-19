@@ -104,6 +104,78 @@ def two_columns():
     doc.build(story)
 
 
+def rtf_sample():
+    """A Word document saved as RTF by LibreOffice, using the formatting the importer supports."""
+    from docx.enum.text import WD_BREAK, WD_COLOR_INDEX
+    from docx.shared import RGBColor
+    doc = Document()
+    section = doc.sections[0]
+    section.page_width, section.page_height = Cm(21), Cm(29.7)
+    section.left_margin = section.right_margin = Cm(2.5)
+    normal = doc.styles["Normal"]
+    normal.font.name = "Liberation Serif"
+    normal.font.size = Pt(11)
+    normal.paragraph_format.space_after = Pt(6)
+
+    heading = doc.add_paragraph()
+    heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = heading.add_run("Snail Care Sheet")
+    run.bold = True
+    run.font.size = Pt(16)
+
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+    p.add_run("Garden snails need a ")
+    p.add_run("damp").bold = True
+    p.add_run(" home, ")
+    p.add_run("fresh").italic = True
+    p.add_run(" food and ")
+    p.add_run("calcium").underline = True
+    p.add_run(" for their shells. Keep them ")
+    r = p.add_run("away from salt")
+    r.font.color.rgb = RGBColor(0xC0, 0x00, 0x00)
+    p.add_run(", which harms them, and mist the tank ")
+    r = p.add_run("every evening")
+    r.font.highlight_color = WD_COLOR_INDEX.YELLOW
+    p.add_run(". A tank of 20 litres suits two or three adults; the ideal humidity is about 80%")
+    p.add_run("1").font.superscript = True
+    p.add_run(".")
+
+    for item in ["Cucumber and lettuce", "Cuttlefish bone for calcium", "Fresh water, changed daily"]:
+        doc.add_paragraph(item, style="List Bullet")
+    for item in ["Clean the tank weekly.", "Check for eggs in the soil."]:
+        doc.add_paragraph(item, style="List Number")
+
+    p = doc.add_paragraph()
+    p.paragraph_format.tab_stops.add_tab_stop(Cm(5))
+    p.add_run("Temperature:\t18-24 °C")
+
+    p = doc.add_paragraph("This paragraph uses one-and-a-half line spacing so that there is more room between its lines, "
+                          "which makes longer notes easier to read when printed.")
+    p.paragraph_format.line_spacing = 1.5
+
+    table = doc.add_table(rows=3, cols=2)
+    table.style = "Table Grid"
+    for row, (food, often) in zip(table.rows, [("Food", "How often"), ("Lettuce", "Daily"), ("Cuttlefish", "Always available")]):
+        row.cells[0].text, row.cells[1].text = food, often
+
+    with tempfile.TemporaryDirectory() as tmp:
+        png = os.path.join(tmp, "box.png")
+        with open(png, "wb") as f:
+            f.write(tiny_png())
+        doc.add_picture(png, width=Cm(3))
+
+    p = doc.add_paragraph()
+    p.add_run().add_break(WD_BREAK.PAGE)
+    p = doc.add_paragraph("Second page: café, naïve, Москва.")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "sample.docx")
+        doc.save(path)
+        subprocess.run(["soffice", "--headless", "--convert-to", "rtf", "--outdir", HERE, path], check=True, capture_output=True)
+
+
 if __name__ == "__main__":
     word_document()
     two_columns()
+    rtf_sample()
