@@ -1,0 +1,36 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{A488FC40-9BF1-478E-AF89-54FA3397246B}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PdfEditor.Core", "src\PdfEditor.Core\PdfEditor.Core.csproj", "{305A3591-6EFD-4C15-9FBA-B25677339873}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{E13EDA54-40B9-40E5-A92E-7012E4FE30D3}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PdfEditor.Core.Tests", "tests\PdfEditor.Core.Tests\PdfEditor.Core.Tests.csproj", "{5D1BE1F8-0F89-415F-8CB3-1ED4E79D4B60}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{305A3591-6EFD-4C15-9FBA-B25677339873}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{305A3591-6EFD-4C15-9FBA-B25677339873}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{305A3591-6EFD-4C15-9FBA-B25677339873}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{305A3591-6EFD-4C15-9FBA-B25677339873}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5D1BE1F8-0F89-415F-8CB3-1ED4E79D4B60}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5D1BE1F8-0F89-415F-8CB3-1ED4E79D4B60}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5D1BE1F8-0F89-415F-8CB3-1ED4E79D4B60}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5D1BE1F8-0F89-415F-8CB3-1ED4E79D4B60}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{305A3591-6EFD-4C15-9FBA-B25677339873} = {A488FC40-9BF1-478E-AF89-54FA3397246B}
+		{5D1BE1F8-0F89-415F-8CB3-1ED4E79D4B60} = {E13EDA54-40B9-40E5-A92E-7012E4FE30D3}
+	EndGlobalSection
+EndGlobal
