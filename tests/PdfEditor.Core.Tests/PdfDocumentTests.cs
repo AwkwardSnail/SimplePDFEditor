@@ -602,6 +602,70 @@ public class PdfDocumentTests
         return ms.ToArray();
     }
 
+    [Theory]
+    [InlineData(90)]
+    [InlineData(180)]
+    [InlineData(270)]
+    public void Vector_drawings_are_handled_the_way_they_are_seen_on_a_rotated_page(int rotation)
+    {
+        // The RTF sample's table (six bordered cells) on a page that then gets a rotate flag.
+        using var doc = PdfDocument.FromRtf(File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "Fixtures", "sample.rtf")), out _);
+        doc.SetPageRotation(0, rotation);
+        var shown = doc.GetPageSize(0);
+        var table = doc.GetDrawings(0).OrderByDescending(d => d.ObjectIndices.Count).First();
+        Assert.Equal(6, table.ObjectIndices.Count);
+        Assert.True(table.Bounds.X >= 0 && table.Bounds.Right <= shown.Width && table.Bounds.Y >= 0 && table.Bounds.Bottom <= shown.Height);
+
+        // Moved 12 right and 30 up as seen on screen: that is exactly how its outline shifts.
+        doc.MoveObjects(0, table.ObjectIndices, 12, -30);
+        using var moved = Reopen(doc);
+        var after = moved.GetDrawings(0).OrderByDescending(d => d.ObjectIndices.Count).First();
+        Assert.Equal(6, after.ObjectIndices.Count);
+        Assert.Equal(table.Bounds.X + 12, after.Bounds.X, 1);
+        Assert.Equal(table.Bounds.Y - 30, after.Bounds.Y, 1);
+        Assert.Equal(table.Bounds.Width, after.Bounds.Width, 1);
+        Assert.Equal(table.Bounds.Height, after.Bounds.Height, 1);
+
+        // A page break above it: same shape and size on the new page, which is turned the same way.
+        Assert.True(moved.InsertPageBreak(0, after.Bounds.Y - 1) > 0);
+        using var broken = Reopen(moved);
+        Assert.Equal(rotation, broken.GetPageRotation(1));
+        Assert.Equal(shown, broken.GetPageSize(1));
+        var onNext = broken.GetDrawings(1).OrderByDescending(d => d.ObjectIndices.Count).First();
+        Assert.Equal(6, onNext.ObjectIndices.Count);
+        Assert.Equal(after.Bounds.X, onNext.Bounds.X, 1);
+        Assert.Equal(after.Bounds.Width, onNext.Bounds.Width, 1);
+        Assert.Equal(after.Bounds.Height, onNext.Bounds.Height, 1);
+        Assert.InRange(onNext.Bounds.Y, 17, shown.Height / 4 + 1);     // it starts the new page, at the top margin
+        Assert.DoesNotContain(broken.GetDrawings(0), d => d.ObjectIndices.Count == 6);
+
+        // Deleting it removes all six shapes.
+        int before = broken.GetDrawings(1).Count;
+        broken.RemoveObjects(1, onNext.ObjectIndices);
+        Assert.Equal(before - 1, broken.GetDrawings(1).Count);
+    }
+
+    [Theory]
+    [InlineData(90)]
+    [InlineData(270)]
+    public void A_group_on_a_rotated_page_comes_apart_without_anything_moving(int rotation)
+    {
+        using var doc = PdfDocument.Open(PdfWithGroup());
+        doc.SetPageRotation(0, rotation);
+        using var turned = Reopen(doc);
+        var before = turned.Render(0);
+        Assert.True(turned.Ungroup(0, turned.GetGroups(0).Single().ObjectIndex, out var problem), problem);
+        using var saved = Reopen(turned);
+        var after = saved.Render(0);
+        int changed = 0;
+        for (int i = 0; i < before.Pixels.Length; i += 4)
+            if (Math.Abs(before.Pixels[i] - after.Pixels[i]) + Math.Abs(before.Pixels[i + 1] - after.Pixels[i + 1]) + Math.Abs(before.Pixels[i + 2] - after.Pixels[i + 2]) > 60) changed++;
+        Assert.True(changed < 20, $"{changed} pixels changed");
+        var box = saved.GetDrawings(0).Single();
+        Assert.True(Math.Abs(box.Bounds.Width * box.Bounds.Height - 80 * 40) < 10, $"the box is {box.Bounds}");
+        Assert.Contains("Group text", saved.GetPageText(0));
+    }
+
     [Fact]
     public void Bad_input_gives_clear_errors()
     {
