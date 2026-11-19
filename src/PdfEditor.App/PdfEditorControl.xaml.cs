@@ -1171,7 +1171,7 @@ public partial class PdfEditorControl : UserControl
         try { data = File.ReadAllBytes(dialog.FileName); }
         catch (Exception ex) { ShowError("Could not read the image file.", ex); return; }
         int page = _page;
-        if (Edit(d => d.ReplaceImage(page, image.ObjectIndex, data)))
+        if (Edit(d => d.ReplaceImage(page, image.ObjectIndex, data, asDisplayed: true)))
             ShowStatus("Image replaced. It keeps the old image's place; a picture of other proportions is fitted inside the old outline.");
     }
 
@@ -1186,7 +1186,8 @@ public partial class PdfEditorControl : UserControl
         string file = Path.Combine(folder, $"image-{Guid.NewGuid():N}.png");
         try
         {
-            var pixels = Doc.GetImagePixels(page, image.ObjectIndex);
+            // The way it looks on the page: a scan stored sideways opens upright in Paint.
+            var pixels = Doc.GetImagePixels(page, image.ObjectIndex, asDisplayed: true);
             Directory.CreateDirectory(folder);
             var bitmap = BitmapSource.Create(pixels.Width, pixels.Height, 96, 96, PixelFormats.Bgra32, null, pixels.Pixels, pixels.Stride);
             var encoder = new PngBitmapEncoder();
@@ -1224,7 +1225,7 @@ public partial class PdfEditorControl : UserControl
                 stream.CopyTo(memory);
                 edited = memory.ToArray();
             }
-            if (Edit(d => d.ReplaceImage(page, image.ObjectIndex, edited))) ShowStatus("The edited image is in the document. Undo brings the old one back.");
+            if (Edit(d => d.ReplaceImage(page, image.ObjectIndex, edited, asDisplayed: true))) ShowStatus("The edited image is in the document. Undo brings the old one back.");
         }
         catch (Exception ex)
         {

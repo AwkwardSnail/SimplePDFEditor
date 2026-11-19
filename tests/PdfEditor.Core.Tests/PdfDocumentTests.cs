@@ -542,6 +542,53 @@ public class PdfDocumentTests
         Assert.Throws<PdfException>(() => saved.ReplaceImage(0, replaced.ObjectIndex, new byte[] { 1, 2, 3 }));
     }
 
+    [Theory]
+    [InlineData(0, 0)]
+    [InlineData(90, 0)]
+    [InlineData(270, 0)]      // a scan stored sideways, turned upright by the page
+    [InlineData(180, 90)]     // page and image both turned
+    public void Image_pixels_can_be_read_and_replaced_the_way_the_image_is_displayed(int pageRotation, int imageRotation)
+    {
+        using var doc = PdfDocument.Create();
+        doc.AddPage(400, 600);
+        doc.AddImage(0, Png, x: 100, y: 100, width: 150, height: 150);  // red, green / blue, white
+        doc.SetPageRotation(0, pageRotation);
+        doc.RotateImage(0, doc.GetImages(0).Single().ObjectIndex, imageRotation);
+        var image = doc.GetImages(0).Single();
+
+        // What the page shows in each quarter of the image...
+        (byte, byte, byte) Quarter(RenderedPage page, PdfRect r, int qx, int qy)
+        {
+            int i = (int)(r.Y + r.Height * (0.25 + 0.5 * qy)) * page.Stride + (int)(r.X + r.Width * (0.25 + 0.5 * qx)) * 4;
+            return (page.Pixels[i], page.Pixels[i + 1], page.Pixels[i + 2]);
+        }
+        var rendered = doc.Render(0);
+        // ...is what the displayed pixels hold, in the same places.
+        var shown = doc.GetImagePixels(0, image.ObjectIndex, asDisplayed: true);
+        Assert.Equal((2, 2), (shown.Width, shown.Height));
+        for (int qy = 0; qy < 2; qy++)
+            for (int qx = 0; qx < 2; qx++)
+            {
+                int i = (qy * 2 + qx) * 4;
+                Assert.Equal(Quarter(rendered, image.Bounds, qx, qy), (shown.Pixels[i], shown.Pixels[i + 1], shown.Pixels[i + 2]));
+            }
+
+        // Putting those same displayed pixels back changes nothing on the page.
+        doc.ReplaceImage(0, image.ObjectIndex, EncodeBmp(shown.Pixels, 2, 2), asDisplayed: true);
+        using var saved = Reopen(doc);
+        var after = saved.Render(0);
+        var bounds = saved.GetImages(0).Single().Bounds;
+        Assert.Equal(Round(image.Bounds), Round(bounds));
+        for (int qy = 0; qy < 2; qy++)
+            for (int qx = 0; qx < 2; qx++)
+                Assert.Equal(Quarter(rendered, image.Bounds, qx, qy), Quarter(after, bounds, qx, qy));
+
+        // A new picture with yellow in its top-left quarter is seen with yellow at the top-left.
+        byte[] picture = [0, 255, 255, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255];
+        saved.ReplaceImage(0, saved.GetImages(0).Single().ObjectIndex, EncodeBmp(picture, 2, 2), asDisplayed: true);
+        Assert.Equal(((byte)0, (byte)255, (byte)255), Quarter(saved.Render(0), saved.GetImages(0).Single().Bounds, 0, 0));
+    }
+
     /// <summary>A 32-bit BMP file from top-down BGRA pixels.</summary>
     private static byte[] EncodeBmp(byte[] bgra, int width, int height)
     {
