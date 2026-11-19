@@ -375,7 +375,7 @@ public class PdfDocumentTests
     }
 
     /// <summary>A page whose text is drawn directly, plus a group (form XObject) holding a blue box and its own text.</summary>
-    private static byte[] PdfWithGroup()
+    internal static byte[] PdfWithGroup()
     {
         const string page = "BT /F1 20 Tf 100 700 Td (Page text) Tj ET /Fm1 Do";
         const string group = "0 0 1 rg 100 500 80 40 re f BT /F1 16 Tf 100 600 Td (Group text) Tj ET";
