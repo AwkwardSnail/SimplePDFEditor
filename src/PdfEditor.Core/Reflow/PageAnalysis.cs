@@ -435,7 +435,8 @@ internal sealed unsafe class PageAnalysis
         };
         // A finished sentence with room to spare before the page's margin, followed by a capital,
         // also ends a paragraph (a run of one-line paragraphs gives no other clue).
-        if (!hadRoom && lineMode == Mode.Left && pageRight is { } edge && q.Right + space + word < edge - slack
+        // Only for a paragraph of one line so far: with two or more, its own lines already show how wide it runs.
+        if (!hadRoom && p.Lines.Count == 1 && lineMode == Mode.Left && pageRight is { } edge && q.Right + space + word < edge - slack
             && q.Glyphs[^1].Ch is '.' or '!' or '?' or ':' && (char.IsUpper(l.Glyphs[0].Ch) || char.IsDigit(l.Glyphs[0].Ch)))
             hadRoom = true;
         if (hadRoom) return false;

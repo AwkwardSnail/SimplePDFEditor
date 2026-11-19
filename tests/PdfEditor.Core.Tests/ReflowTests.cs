@@ -329,6 +329,71 @@ public unsafe class ReflowTests
         Assert.Equal("The snail moved with remarkable patience across the stone.", doc.GetParagraphs(0).Single().Text);
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(90)]
+    [InlineData(180)]
+    [InlineData(270)]
+    public void Text_on_a_page_with_a_rotate_flag_is_edited_the_way_it_is_seen(int rotation)
+    {
+        // Like a scan with an OCR text layer: the page carries a rotate flag, and its text is
+        // stored turned so that it reads upright on screen.
+        using var doc = PdfDocument.Create();
+        doc.AddPage(400, 600);
+        doc.SetPageRotation(0, rotation);
+        var shown = doc.GetPageSize(0);
+        doc.AddText(0, 50, 60, "The snail crossed the garden path at its own\nsteady pace and reached the far wall by noon.", new TextStyle { Size = 11 });
+        doc.AddText(0, 50, 200, "A second paragraph further down the page.", new TextStyle { Size = 11 });
+        using var start = Reopen(doc);
+        var before = start.GetParagraphs(0);
+        Assert.Equal(2, before.Count);
+        var first = before[0];
+        Assert.Equal(2, first.LineCount);
+        Assert.InRange(first.Bounds.X, 49, 52);
+
+        void AssertUpright(PdfDocument d, int page)
+        {
+            Assert.All(d.GetTextRuns(page).Where(r => r.Text.Trim().Length > 3), r => Assert.True(r.Bounds.Width > r.Bounds.Height, $"'{r.Text}' is not horizontal: {r.Bounds}"));
+            Assert.All(d.GetParagraphs(page), p => Assert.True(p.Bounds.X >= 0 && p.Bounds.Right <= d.GetPageSize(page).Width + 1 && p.Bounds.Y >= 0 && p.Bounds.Bottom <= d.GetPageSize(page).Height + 1, $"off the page: {p.Bounds}"));
+        }
+
+        // Reflow: more words, some in a script the font lacks (so a substitute font is drawn turned too).
+        var result = start.ReplaceParagraphText(0, first.Index, first.Text + " It rested there, in the shade, until the evening rain, and then set off for Москва.");
+        Assert.True(result.UsedSubstituteFont);
+        using var reflowed = Reopen(start);
+        var after = reflowed.GetParagraphs(0);
+        Assert.Equal(2, after.Count);
+        Assert.Contains("Москва", after[0].Text);
+        Assert.True(after[0].LineCount > 2);
+        Assert.Equal(first.Bounds.X, after[0].Bounds.X, 0);
+        Assert.Equal(first.Bounds.Y, after[0].Bounds.Y, 0);
+        Assert.Equal(before[1].Bounds.Y + result.HeightChange, after[1].Bounds.Y, 0);   // pushed straight down the screen
+        Assert.Equal(before[1].Bounds.X, after[1].Bounds.X, 0);
+        AssertUpright(reflowed, 0);
+
+        // A single run edited and moved.
+        var run = reflowed.GetTextRuns(0).First(r => r.Text.Contains("second"));
+        reflowed.EditText(0, run.ObjectIndex, "A second paragraph, edited.");
+        run = reflowed.GetTextRuns(0).First(r => r.Text.Contains("edited"));
+        reflowed.MoveObject(0, run.ObjectIndex, 30, 10);
+        var moved = reflowed.GetTextRuns(0).First(r => r.Text.Contains("edited"));
+        Assert.Equal(run.Bounds.X + 30, moved.Bounds.X, 0);
+        Assert.Equal(run.Bounds.Y + 10, moved.Bounds.Y, 0);
+        AssertUpright(reflowed, 0);
+
+        // A page break: the new page looks the same way up, with the text upright on it.
+        Assert.True(reflowed.InsertPageBreak(0, moved.Bounds.Y - 1) > 0);
+        using var broken = Reopen(reflowed);
+        Assert.Equal(2, broken.PageCount);
+        Assert.Equal(shown, broken.GetPageSize(1));
+        Assert.Equal(rotation, broken.GetPageRotation(1));
+        Assert.Contains("edited", broken.GetPageText(1));
+        Assert.DoesNotContain("edited", broken.GetPageText(0));
+        AssertUpright(broken, 0);
+        AssertUpright(broken, 1);
+        Assert.InRange(broken.GetTextRuns(1).First().Bounds.Y, 0, shown.Height / 3);
+    }
+
     [Fact]
     public void Bad_requests_give_clear_errors()
     {

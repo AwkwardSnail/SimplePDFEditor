@@ -225,11 +225,12 @@ public sealed unsafe partial class PdfDocument
         string name = StandardFontName(style);
         // A sheared (synthetic italic) transform plus an italic font would slant twice.
         var matrix = style.Italic && Math.Abs(s.Matrix.C) > 0.05 * Math.Abs(s.Matrix.D) ? s.Matrix with { C = 0 } : s.Matrix;
-        double scale = s.Lin.A / s.Matrix.A; // user-to-view scale along the line
+        // The page's user-to-view turn, recovered from the style, so the look-alike is seen the same way up.
+        var userToView = Affine.Concat(s.Matrix.Invert(), s.Lin);
         return new StyleRef
         {
             Font = StandardFontHandle(name), FontName = name, FontSize = s.FontSize, Matrix = matrix,
-            Lin = new Affine(s.Lin.A, s.Lin.B, matrix.C * scale, s.Lin.D, 0, 0),
+            Lin = Affine.Concat(matrix, userToView),
             Fill = s.Fill, Stroke = s.Stroke, RenderMode = s.RenderMode,
         };
     }
