@@ -9,8 +9,8 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        Editor.TitleChanged += (_, _) => Title = Editor.DocumentTitle + " - PDF Editor";
-        Title = Editor.DocumentTitle + " - PDF Editor";
+        Editor.TitleChanged += (_, _) => Title = Editor.DocumentTitle + " - SimplePDF Editor";
+        Title = Editor.DocumentTitle + " - SimplePDF Editor";
 
         // A PDF path on the command line opens that file, so other apps can launch the editor on a document.
         var args = Environment.GetCommandLineArgs();

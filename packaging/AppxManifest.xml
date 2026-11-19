@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  MSIX manifest for the PDF editor.
+  MSIX manifest for SimplePDF Editor.
 
   Identity Name, Identity Publisher and PublisherDisplayName are copied exactly from Partner
   Center (Product management > Product identity), including the "Akward" spelling of the
-  prefix. Store ID 9NNGF37Z5668. The two DisplayNames must be a name reserved for the product
-  in Partner Center before a Store submission.
+  prefix. Store ID 9P11J3R4HXNP. The two DisplayNames are the name reserved for the product
+  in Partner Center, "SimplePDF Editor".
   pack.ps1 sets Identity Version from its -Version parameter.
 -->
 <Package
@@ -15,13 +15,13 @@
   IgnorableNamespaces="uap rescap">
 
   <Identity
-    Name="AkwardSnail.SimplePDFedit"
+    Name="AkwardSnail.SimplePDFEditor"
     Publisher="CN=A55585C2-FE40-4ED1-9B77-46466AE9C532"
     Version="0.1.0.0"
     ProcessorArchitecture="x64" />
 
   <Properties>
-    <DisplayName>PDF Editor</DisplayName>
+    <DisplayName>SimplePDF Editor</DisplayName>
     <PublisherDisplayName>aWkward Snail</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
@@ -37,7 +37,7 @@
   <Applications>
     <Application Id="PdfEditor" Executable="PdfEditor.exe" EntryPoint="Windows.FullTrustApplication">
       <uap:VisualElements
-        DisplayName="PDF Editor"
+        DisplayName="SimplePDF Editor"
         Description="Edit PDFs: text, pages, pictures, highlights and comments."
         BackgroundColor="transparent"
         Square150x150Logo="Assets\Square150x150Logo.png"

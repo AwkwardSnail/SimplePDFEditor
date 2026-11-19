@@ -117,7 +117,7 @@ public partial class PdfEditorControl : UserControl
         CommitEditor();
         if (!_session.IsModified) return true;
         string name = _session.FilePath is null ? _session.SuggestedFileName : Path.GetFileName(_session.FilePath);
-        return MessageBox.Show(Window.GetWindow(this), $"Save changes to {name}?", "PDF Editor", MessageBoxButton.YesNoCancel, MessageBoxImage.Question) switch
+        return MessageBox.Show(Window.GetWindow(this), $"Save changes to {name}?", "SimplePDF Editor", MessageBoxButton.YesNoCancel, MessageBoxImage.Question) switch
         {
             MessageBoxResult.Yes => Save(saveAs: false),
             MessageBoxResult.No => true,
@@ -159,7 +159,7 @@ public partial class PdfEditorControl : UserControl
     }
 
     private void ShowError(string what, Exception e) =>
-        MessageBox.Show(Window.GetWindow(this), what + "\n\n" + e.Message, "PDF Editor", MessageBoxButton.OK, MessageBoxImage.Warning);
+        MessageBox.Show(Window.GetWindow(this), what + "\n\n" + e.Message, "SimplePDF Editor", MessageBoxButton.OK, MessageBoxImage.Warning);
 
     private bool Save(bool saveAs)
     {
@@ -936,7 +936,7 @@ public partial class PdfEditorControl : UserControl
         ShowStatus($"{name} was laid out as {pages}. Double-click a paragraph to edit it.");
         if (result.Warnings.Count > 0)
             MessageBox.Show(Window.GetWindow(this), $"{name} was imported as {pages}, but not everything could be brought across:\n\n• " + string.Join("\n• ", result.Warnings),
-                "PDF Editor", MessageBoxButton.OK, MessageBoxImage.Information);
+                "SimplePDF Editor", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
     private static StandardFont FamilyOf(string fontName) =>

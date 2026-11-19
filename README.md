@@ -1,4 +1,4 @@
-# PDFeditor
+# SimplePDF Editor
 
 A PDF editor for Windows by [Awkward Snail](https://awkwardsnail.com.au): add and rearrange pages, edit and add text and pictures, highlight and comment. It works offline, collects no data and never goes online.
 
