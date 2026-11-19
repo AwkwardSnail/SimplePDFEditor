@@ -46,6 +46,9 @@ public sealed record TextRun(int ObjectIndex, string Text, PdfRect Bounds, strin
 /// <summary>An image placed on a page.</summary>
 public sealed record ImageInfo(int ObjectIndex, PdfRect Bounds, int PixelWidth, int PixelHeight);
 
+/// <summary>A vector drawing: a group of shapes that sit together on the page.</summary>
+public sealed record DrawingInfo(IReadOnlyList<int> ObjectIndices, PdfRect Bounds);
+
 public enum TextEditResult
 {
     /// <summary>The text was changed and the original font kept.</summary>

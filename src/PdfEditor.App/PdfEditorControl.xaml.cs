@@ -19,11 +19,12 @@ namespace PdfEditor.App;
 public partial class PdfEditorControl : UserControl
 {
     private enum Tool { Select, Text, Highlight, Comment }
-    private enum ItemKind { Text, Image, Annotation }
+    private enum ItemKind { Text, Image, Annotation, Drawing }
     private enum Drag { None, Move, Resize, Highlight }
 
     /// <summary>What is currently selected on the page. Bounds are in page points.</summary>
-    private sealed record Selection(ItemKind Kind, int Index, PdfRect Bounds);
+    /// <summary>For a drawing, Index is its first shape and Group lists all of its shapes.</summary>
+    private sealed record Selection(ItemKind Kind, int Index, PdfRect Bounds, IReadOnlyList<int>? Group = null);
 
     private const double HandleSize = 10;
     private static readonly double[] ZoomSteps = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
@@ -38,6 +39,7 @@ public partial class PdfEditorControl : UserControl
     // What is on the current page, refreshed with every render and used for hit-testing.
     private IReadOnlyList<TextRun> _runs = [];
     private IReadOnlyList<ImageInfo> _images = [];
+    private IReadOnlyList<DrawingInfo> _drawings = [];
     private IReadOnlyList<AnnotationInfo> _annotations = [];
 
     private Selection? _selection;
@@ -225,6 +227,7 @@ public partial class PdfEditorControl : UserControl
 
         _runs = Doc.GetTextRuns(_page);
         _images = Doc.GetImages(_page);
+        _drawings = Doc.GetDrawings(_page);
         _annotations = Doc.GetAnnotations(_page);
 
         // Keep the selection if the same item is still there (for example after moving it).
@@ -234,6 +237,7 @@ public partial class PdfEditorControl : UserControl
             {
                 ItemKind.Text => _runs.Where(r => r.ObjectIndex == s.Index).Select(r => s with { Bounds = r.Bounds }).FirstOrDefault(),
                 ItemKind.Image => _images.Where(i => i.ObjectIndex == s.Index).Select(i => s with { Bounds = i.Bounds }).FirstOrDefault(),
+                ItemKind.Drawing => _drawings.Where(d => d.ObjectIndices[0] == s.Index).Select(d => s with { Bounds = d.Bounds, Group = d.ObjectIndices }).FirstOrDefault(),
                 _ => _annotations.Where(a => a.Index == s.Index).Select(a => s with { Bounds = a.Bounds }).FirstOrDefault(),
             };
         }
@@ -586,7 +590,10 @@ public partial class PdfEditorControl : UserControl
         var run = _runs.LastOrDefault(r => r.Bounds.Contains(p.X, p.Y));
         if (run is not null) return new Selection(ItemKind.Text, run.ObjectIndex, run.Bounds);
         var image = _images.LastOrDefault(i => i.Bounds.Contains(p.X, p.Y));
-        return image is null ? null : new Selection(ItemKind.Image, image.ObjectIndex, image.Bounds);
+        if (image is not null) return new Selection(ItemKind.Image, image.ObjectIndex, image.Bounds);
+        // Vector drawings last, smallest first, so a figure inside a frame is picked before the frame.
+        var drawing = _drawings.Where(d => d.Bounds.Contains(p.X, p.Y)).OrderBy(d => d.Bounds.Width * d.Bounds.Height).FirstOrDefault();
+        return drawing is null ? null : new Selection(ItemKind.Drawing, drawing.ObjectIndices[0], drawing.Bounds, drawing.ObjectIndices);
     }
 
     private void Select(Selection? selection)
@@ -661,7 +668,10 @@ public partial class PdfEditorControl : UserControl
         var target = _dragBounds;
         double dx = target.X - s.Bounds.X, dy = target.Y - s.Bounds.Y;
         if (drag == Drag.Move && (Math.Abs(dx) > 0.5 || Math.Abs(dy) > 0.5))
-            Edit(d => d.MoveObject(page, s.Index, dx, dy));
+        {
+            if (s.Group is { } shapes) Edit(d => d.MoveObjects(page, shapes, dx, dy));
+            else Edit(d => d.MoveObject(page, s.Index, dx, dy));
+        }
         else if (drag == Drag.Resize && Math.Abs(target.Width - s.Bounds.Width) > 0.5)
             Edit(d => d.SetImageBounds(page, s.Index, target));
         else DrawOverlay();
@@ -921,6 +931,7 @@ public partial class PdfEditorControl : UserControl
         int page = _page;
         _selection = null;
         if (s.Kind == ItemKind.Annotation) Edit(d => d.RemoveAnnotation(page, s.Index));
+        else if (s.Group is { } shapes) Edit(d => d.RemoveObjects(page, shapes));
         else Edit(d => d.RemoveObject(page, s.Index));
     }
 

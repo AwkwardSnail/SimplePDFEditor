@@ -15,7 +15,12 @@ public sealed unsafe partial class PdfDocument
     {
         int count = Native.FPDFPage_CountObjects(page.Handle);
         var indexOf = new Dictionary<IntPtr, int>(count);
-        for (int i = 0; i < count; i++) indexOf[Native.FPDFPage_GetObject(page.Handle, i)] = i;
+        for (int i = 0; i < count; i++)
+        {
+            var obj = Native.FPDFPage_GetObject(page.Handle, i);
+            indexOf[obj] = i;
+            KeepColours(obj);
+        }
 
         var chars = new Dictionary<IntPtr, List<(char Ch, double X, double Y)>>();
         var textPage = Native.FPDFText_LoadPage(page.Handle);
@@ -51,6 +56,20 @@ public sealed unsafe partial class PdfDocument
         }
     }
 
+    /// <summary>
+    /// PDFium only writes RGB colours back when it rewrites a page; colours in other colour spaces
+    /// (CMYK, grey, ICC: common in print-ready PDFs) would turn black. Setting each object's
+    /// colours again as RGB keeps what is seen on screen.
+    /// </summary>
+    private static void KeepColours(IntPtr obj)
+    {
+        int type = Native.FPDFPageObj_GetType(obj);
+        if (type != Native.PAGEOBJ_TEXT && type != 2) return; // text and paths carry their own colours
+        uint r, g, b, a;
+        if (Native.FPDFPageObj_GetFillColor(obj, &r, &g, &b, &a) != 0) Native.FPDFPageObj_SetFillColor(obj, r, g, b, a);
+        if (Native.FPDFPageObj_GetStrokeColor(obj, &r, &g, &b, &a) != 0) Native.FPDFPageObj_SetStrokeColor(obj, r, g, b, a);
+    }
+
     /// <summary>A pinned copy of a text object, or zero when it needs none or cannot have one.</summary>
     private IntPtr Pin(PageHandle page, IntPtr obj, List<(char Ch, double X, double Y)> glyphs)
     {
@@ -76,6 +95,13 @@ public sealed unsafe partial class PdfDocument
             float w = 0;
             Native.FPDFFont_GetGlyphWidth(font, glyphs[k - 1].Ch, size, &w);
             natural += w;
+            // Two characters at one spot are one joined glyph (a ligature such as "fl"). Drawn as
+            // separate letters they must sit side by side, not on top of each other.
+            if (k >= 1 && Math.Abs(glyphs[k].X - glyphs[k - 1].X) < 0.01 && Math.Abs(glyphs[k].Y - glyphs[k - 1].Y) < 0.01)
+            {
+                along = (k >= 2 ? positions[k - 2] : 0) + w;
+                needed = true;
+            }
             positions[k - 1] = (float)along;
             if (Math.Abs(along - natural) > tolerance) needed = true;
         }

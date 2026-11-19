@@ -91,7 +91,8 @@ public class PdfDocumentTests
         doc.AddPage();
         doc.AddText(0, 50, 50, "Привет, улитка");
         using var saved = Reopen(doc);
-        Assert.Contains("Привет, улитка", saved.GetPageText(0));
+        // (Compared without spaces: which space character comes back depends on the fallback font.)
+        Assert.Contains("Привет,улитка", string.Concat(saved.GetPageText(0).Where(c => !char.IsWhiteSpace(c) && c != ' ')));
     }
 
     [Fact]
@@ -321,6 +322,56 @@ public class PdfDocumentTests
             Assert.Single(reopened.Document.GetAnnotations(0));
         }
         finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public void Vector_drawings_are_grouped_and_can_be_moved_and_removed()
+    {
+        // The RTF sample's table is drawn as six bordered cells: one drawing made of six shapes.
+        using var doc = PdfDocument.FromRtf(File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "Fixtures", "sample.rtf")), out _);
+        var table = doc.GetDrawings(0).OrderByDescending(d => d.ObjectIndices.Count).First();
+        Assert.Equal(6, table.ObjectIndices.Count);
+        Assert.True(table.Bounds.Width > 400);
+        string text = doc.GetPageText(0);
+
+        doc.MoveObjects(0, table.ObjectIndices, 12, -30);
+        using var moved = Reopen(doc);
+        var after = moved.GetDrawings(0).OrderByDescending(d => d.ObjectIndices.Count).First();
+        Assert.Equal(6, after.ObjectIndices.Count);
+        Assert.Equal(table.Bounds.X + 12, after.Bounds.X, 1);
+        Assert.Equal(table.Bounds.Y - 30, after.Bounds.Y, 1);
+        Assert.Equal(text, moved.GetPageText(0));
+
+        int before = moved.GetDrawings(0).Count;
+        moved.RemoveObjects(0, after.ObjectIndices);
+        Assert.Equal(before - 1, moved.GetDrawings(0).Count);
+    }
+
+    [Fact]
+    public void Colours_outside_rgb_survive_a_page_rewrite()
+    {
+        // A CMYK-filled box, a grey box and CMYK text, as print-ready PDFs have them. PDFium only
+        // writes RGB colours back when it rewrites a page, so these used to turn black.
+        const string content = "0.8 0.2 0 0 k 100 600 200 100 re f 0.6 g 100 400 80 80 re f BT 0 1 1 0 k /F1 40 Tf 100 250 Td (Hello) Tj ET";
+        string pdf = "%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n" +
+                     "3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>endobj\n" +
+                     $"4 0 obj<</Length {content.Length}>>stream\n{content}\nendstream endobj\n" +
+                     "5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF";
+        using var doc = PdfDocument.Open(System.Text.Encoding.ASCII.GetBytes(pdf));
+        var original = doc.Render(0);
+        (byte, byte, byte) At(RenderedPage image, int x, int y) => (image.Pixels[y * image.Stride + x * 4], image.Pixels[y * image.Stride + x * 4 + 1], image.Pixels[y * image.Stride + x * 4 + 2]);
+        var blue = At(original, 200, 792 - 650);
+        var grey = At(original, 140, 792 - 440);
+        Assert.NotEqual((0, 0, 0), ((int)blue.Item1, (int)blue.Item2, (int)blue.Item3));
+
+        var run = doc.GetTextRuns(0).Single();
+        doc.MoveObject(0, run.ObjectIndex, 30, 0); // changes an original object, so the page is rewritten
+        using var saved = Reopen(doc);
+        var after = saved.Render(0);
+        Assert.Equal(blue, At(after, 200, 792 - 650));
+        Assert.Equal(grey, At(after, 140, 792 - 440));
+        var red = saved.GetTextRuns(0).Single().Color; // CMYK red, converted to RGB
+        Assert.True(red.R > 200 && red.G < 60 && red.B < 60, $"expected red text, got {red}");
     }
 
     [Fact]

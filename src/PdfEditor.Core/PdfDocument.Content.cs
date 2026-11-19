@@ -465,6 +465,78 @@ public sealed unsafe partial class PdfDocument
         page.Dirty = page.ChangedExisting = true;
     }
 
+    // ------------------------------------------------------------------ drawings (vector artwork)
+
+    /// <summary>
+    /// The vector drawings on a page. A drawing in a PDF is usually many separate shapes, so
+    /// shapes that touch or sit close together are grouped into one drawing. Shapes covering
+    /// most of the page (backgrounds, page frames) are left out.
+    /// </summary>
+    public IReadOnlyList<DrawingInfo> GetDrawings(int pageIndex)
+    {
+        using var page = OpenPage(pageIndex);
+        const double reach = 3; // shapes within this many points of each other belong together
+        double pageArea = page.Width * page.Height;
+        var shapes = new List<(int Index, PdfRect Bounds)>();
+        int count = Native.FPDFPage_CountObjects(page.Handle);
+        for (int i = 0; i < count; i++)
+        {
+            var obj = Native.FPDFPage_GetObject(page.Handle, i);
+            int type = Native.FPDFPageObj_GetType(obj);
+            if (type is Native.PAGEOBJ_TEXT or Native.PAGEOBJ_IMAGE) continue;
+            var bounds = ObjectBounds(page, obj);
+            if (bounds.Width <= 0 && bounds.Height <= 0) continue;
+            if (bounds.Width * bounds.Height > 0.5 * pageArea) continue;
+            shapes.Add((i, bounds));
+        }
+
+        // Union-find over shapes whose (slightly grown) boxes overlap.
+        var parent = Enumerable.Range(0, shapes.Count).ToArray();
+        int Find(int x) { while (parent[x] != x) x = parent[x] = parent[parent[x]]; return x; }
+        for (int a = 0; a < shapes.Count; a++)
+            for (int b = a + 1; b < shapes.Count; b++)
+            {
+                var (p, q) = (shapes[a].Bounds, shapes[b].Bounds);
+                if (p.X - reach <= q.Right && q.X - reach <= p.Right && p.Y - reach <= q.Bottom && q.Y - reach <= p.Bottom)
+                    parent[Find(a)] = Find(b);
+            }
+
+        return shapes.Select((s, i) => (Shape: s, Root: Find(i)))
+            .GroupBy(x => x.Root)
+            .Select(g =>
+            {
+                double left = g.Min(x => x.Shape.Bounds.X), top = g.Min(x => x.Shape.Bounds.Y);
+                double right = g.Max(x => x.Shape.Bounds.Right), bottom = g.Max(x => x.Shape.Bounds.Bottom);
+                return new DrawingInfo(g.Select(x => x.Shape.Index).OrderBy(i => i).ToList(), new PdfRect(left, top, right - left, bottom - top));
+            })
+            .OrderBy(d => d.ObjectIndices[0])
+            .ToList();
+    }
+
+    /// <summary>Moves several objects together (a drawing's shapes, for example) by an offset in view space.</summary>
+    public void MoveObjects(int pageIndex, IEnumerable<int> objectIndices, double dx, double dy)
+    {
+        using var page = OpenPage(pageIndex);
+        var v = page.ViewToUser;
+        double ux = v.A * dx + v.C * dy, uy = v.B * dx + v.D * dy;
+        foreach (var obj in objectIndices.Distinct().Select(i => GetObject(page, i)).ToList())
+            Native.FPDFPageObj_Transform(obj, 1, 0, 0, 1, ux, uy);
+        page.Dirty = page.ChangedExisting = true;
+    }
+
+    /// <summary>Removes several objects together.</summary>
+    public void RemoveObjects(int pageIndex, IEnumerable<int> objectIndices)
+    {
+        using var page = OpenPage(pageIndex);
+        // Look every object up before removing any: removing one shifts the indices after it.
+        foreach (var obj in objectIndices.Distinct().Select(i => GetObject(page, i)).ToList())
+        {
+            if (Native.FPDFPage_RemoveObject(page.Handle, obj) == 0) throw new PdfException("Could not remove the item.");
+            Native.FPDFPageObj_Destroy(obj);
+        }
+        page.Dirty = page.ChangedExisting = true;
+    }
+
     private static IntPtr GetObject(PageHandle page, int objectIndex, int? requiredType = null, string what = "item")
     {
         if (objectIndex < 0 || objectIndex >= Native.FPDFPage_CountObjects(page.Handle))
