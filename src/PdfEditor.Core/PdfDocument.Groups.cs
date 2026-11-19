@@ -66,6 +66,33 @@ public sealed unsafe partial class PdfDocument
         var form = GetObject(page, objectIndex, PageObjForm, "group");
         if (!ClipIsHarmless(form, UngroupClipSlack)) { problem = "the group is clipped"; return false; }
 
+        var (glyphs, pageFonts) = ReadPageText(page);
+        var copies = new List<IntPtr>();
+        problem = CopyGroupItems(page, form, Affine.Identity, glyphs, pageFonts, copies);
+        if (problem is not null)
+        {
+            foreach (var copy in copies) Native.FPDFPageObj_Destroy(copy);
+            return false;
+        }
+
+        // The copies take the group's place in the drawing order, then the group goes.
+        for (int k = 0; k < copies.Count; k++)
+        {
+            Native.FPDFPage_InsertObjectAtIndex(page.Handle, copies[k], (nuint)(objectIndex + k));
+            page.NewObjects.Add(copies[k]);
+        }
+        Native.FPDFPage_RemoveObject(page.Handle, form);
+        Native.FPDFPageObj_Destroy(form);
+        page.Dirty = page.ChangedExisting = true;
+        return true;
+    }
+
+    /// <summary>
+    /// Where each character of the page is drawn, by the object that draws it, and the fonts the
+    /// page itself draws text with, by name (see ClashesWithPageFont). Needed to copy text objects.
+    /// </summary>
+    private (Dictionary<IntPtr, List<(char Ch, double X, double Y)>> Glyphs, Dictionary<string, List<IntPtr>> PageFonts) ReadPageText(PageHandle page)
+    {
         // Where each character of the page is drawn, by the object that draws it.
         var glyphs = new Dictionary<IntPtr, List<(char Ch, double X, double Y)>>();
         var textPage = Native.FPDFText_LoadPage(page.Handle);
@@ -90,7 +117,6 @@ public sealed unsafe partial class PdfDocument
 
         _glyphCodes.Clear();
         foreach (var list in glyphs.Values) DropPhantomSpaces(list);
-        var copies = new List<IntPtr>();
         // Fonts the page itself draws text with, by name (see ClashesWithPageFont).
         var pageFonts = new Dictionary<string, List<IntPtr>>();
         int total = Native.FPDFPage_CountObjects(page.Handle);
@@ -103,23 +129,7 @@ public sealed unsafe partial class PdfDocument
             if (!pageFonts.TryGetValue(name, out var list)) pageFonts[name] = list = [];
             if (!list.Contains(font)) list.Add(font);
         }
-        problem = CopyGroupItems(page, form, Affine.Identity, glyphs, pageFonts, copies);
-        if (problem is not null)
-        {
-            foreach (var copy in copies) Native.FPDFPageObj_Destroy(copy);
-            return false;
-        }
-
-        // The copies take the group's place in the drawing order, then the group goes.
-        for (int k = 0; k < copies.Count; k++)
-        {
-            Native.FPDFPage_InsertObjectAtIndex(page.Handle, copies[k], (nuint)(objectIndex + k));
-            page.NewObjects.Add(copies[k]);
-        }
-        Native.FPDFPage_RemoveObject(page.Handle, form);
-        Native.FPDFPageObj_Destroy(form);
-        page.Dirty = page.ChangedExisting = true;
-        return true;
+        return (glyphs, pageFonts);
     }
 
     /// <summary>Copies a group's items (and those of groups inside it) as stand-alone objects.</summary>

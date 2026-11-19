@@ -241,6 +241,15 @@ public class ConformanceTests(ITestOutputHelper output)
                 doc.SetShapeFill(0, [ellipse], new PdfColor(30, 70, 200));
                 return doc;
             }),
+            ("watermark added, a paragraph moved a layer down, a shape's line changed", () =>
+            {
+                var doc = PdfDocument.Open(Fixture("word-style.pdf"));
+                int box = doc.AddShape(0, ShapeKind.Box, [new(60, 60), new(300, 200)], new ShapeStyle { Fill = new PdfColor(255, 235, 60) });
+                doc.MoveLayer(0, [box], up: false);
+                doc.SetShapeLine(0, [doc.GetDrawings(0)[0].ObjectIndices[0]], new PdfColor(30, 70, 200), 4);
+                doc.AddWatermark(0, "DRAFT");
+                return doc;
+            }),
             ("page spread over sheets placed by hand", () =>
             {
                 using var doc = PdfDocument.Open(Fixture("word-style.pdf"));

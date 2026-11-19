@@ -48,8 +48,7 @@ public partial class PdfEditorControl : UserControl
     private List<PdfPoint>? _shape;
     private int _shapePage;
 
-    private static readonly (string Name, PdfColor Colour)[] ShapeColours =
-        [("Black", PdfColor.Black), ("Red", new(200, 30, 30)), ("Blue", new(30, 70, 200)), ("Green", new(20, 130, 60)), ("Grey", new(110, 110, 110)), ("White", new(255, 255, 255)), ("Yellow", PdfColor.Yellow)];
+    private static (string Name, PdfColor Colour)[] ShapeColours => ShapeDialogs.Colours;
     private Point _dragStart;            // page points
     private PdfRect _dragBounds;         // where the dragged item would land
     private int _highlightStartChar, _highlightEndChar;
@@ -775,13 +774,18 @@ public partial class PdfEditorControl : UserControl
     {
         var note = _annotations.LastOrDefault(a => a.Bounds.Contains(p.X, p.Y));
         if (note is not null) return new Selection(ItemKind.Annotation, note.Index, note.Bounds);
-        var run = _runs.LastOrDefault(r => r.Bounds.Contains(p.X, p.Y));
+        // Text that spreads over much of the page (a watermark) is picked only when nothing else is there,
+        // or it would be in the way of everything it lies across.
+        double large = Overlay.Width * Overlay.Height / (ViewScale * ViewScale) * 0.2;
+        var run = _runs.LastOrDefault(r => r.Bounds.Contains(p.X, p.Y) && r.Bounds.Width * r.Bounds.Height < large);
         if (run is not null) return new Selection(ItemKind.Text, run.ObjectIndex, run.Bounds);
         var image = _images.LastOrDefault(i => i.Bounds.Contains(p.X, p.Y));
         if (image is not null) return new Selection(ItemKind.Image, image.ObjectIndex, image.Bounds);
         // Vector drawings last, smallest first, so a figure inside a frame is picked before the frame.
         var drawing = _drawings.Where(d => d.Bounds.Contains(p.X, p.Y)).OrderBy(d => d.Bounds.Width * d.Bounds.Height).FirstOrDefault();
-        return drawing is null ? null : new Selection(ItemKind.Drawing, drawing.ObjectIndices[0], drawing.Bounds, drawing.ObjectIndices);
+        if (drawing is not null) return new Selection(ItemKind.Drawing, drawing.ObjectIndices[0], drawing.Bounds, drawing.ObjectIndices);
+        var wide = _runs.LastOrDefault(r => r.Bounds.Contains(p.X, p.Y));
+        return wide is null ? null : new Selection(ItemKind.Text, wide.ObjectIndex, wide.Bounds);
     }
 
     private void Select(Selection? selection)
@@ -970,32 +974,88 @@ public partial class PdfEditorControl : UserControl
         int page = _page;
         var shapes = drawing.ObjectIndices;
         var menu = new ContextMenu { PlacementTarget = Overlay };
-        void Fill(object header, PdfColor? colour, string done)
+        void Add(string header, Action action)
+        {
+            var item = new MenuItem { Header = header };
+            item.Click += (_, _) => action();
+            menu.Items.Add(item);
+        }
+        // What the dialogs start from: the first shape in the drawing that has a look of its own.
+        ShapeStyle? Look() => shapes.Select(i => Doc.GetShapeStyle(page, i)).FirstOrDefault(s => s is not null);
+
+        Add("Filling...", () =>
+        {
+            if (!ShapeDialogs.AskFilling(this, Look()?.Fill, out var fill)) return;
+            _selection = null;
+            int changed = 0;
+            if (!Edit(d => changed = d.SetShapeFill(page, shapes, fill))) return;
+            ShowStatus(changed == 0 ? "Nothing to fill here: lines and arrows take no filling."
+                : fill is null ? "The shape is see-through now. Undo puts the filling back." : "Filled. Undo takes the filling away again.");
+        });
+        Add("Line...", () =>
+        {
+            var look = Look();
+            if (ShapeDialogs.AskLine(this, look?.Stroke ?? PdfColor.Black, look?.Width ?? 2) is not { } line) return;
+            _selection = null;
+            int changed = 0;
+            if (Edit(d => changed = d.SetShapeLine(page, shapes, line.Colour, line.Width)) && changed == 0) ShowStatus("There is no line to change here.");
+        });
+        menu.Items.Add(new Separator());
+        AddLayerItems(menu, shapes);
+        menu.Items.Add(new Separator());
+        Add("Delete", DeleteSelection);
+        menu.IsOpen = true;
+        return true;
+    }
+
+    /// <summary>The two "move one layer" entries, for whatever items a menu is about.</summary>
+    private void AddLayerItems(ContextMenu menu, IReadOnlyList<int> objects)
+    {
+        int page = _page;
+        void Add(string header, bool up)
         {
             var item = new MenuItem { Header = header };
             item.Click += (_, _) =>
             {
                 _selection = null;
-                int changed = 0;
-                if (!Edit(d => changed = d.SetShapeFill(page, shapes, colour))) return;
-                ShowStatus(changed > 0 ? done : "Nothing to fill here: lines and arrows take no fill.");
+                bool moved = false;
+                if (!Edit(d => moved = d.MoveLayer(page, objects, up))) return;
+                ShowStatus(moved ? (up ? "Moved one layer up." : "Moved one layer down.")
+                    : up ? "Nothing lies over it: it is at the front already." : "Nothing lies under it: it is at the back already.");
             };
             menu.Items.Add(item);
         }
-        Fill("See-through (no fill)", null, "The shape is see-through now. Undo puts the fill back.");
-        foreach (var (name, colour) in ShapeColours)
-        {
-            var row = new StackPanel { Orientation = Orientation.Horizontal };
-            row.Children.Add(new Rectangle { Width = 14, Height = 14, Fill = new SolidColorBrush(ToColor(colour)), Stroke = Brushes.Gray, StrokeThickness = 1, Margin = new Thickness(0, 0, 6, 0) });
-            row.Children.Add(new TextBlock { Text = "Fill " + name.ToLowerInvariant() });
-            Fill(row, colour, $"Filled {name.ToLowerInvariant()}.");
-        }
+        Add("Move one layer up", true);
+        Add("Move one layer down", false);
+    }
+
+    /// <summary>A right-click on text offers to move it a layer up or down, or delete it.</summary>
+    private void ShowTextMenu(Selection text)
+    {
+        Focus();
+        Select(text);
+        var menu = new ContextMenu { PlacementTarget = Overlay };
+        AddLayerItems(menu, [text.Index]);
         menu.Items.Add(new Separator());
         var delete = new MenuItem { Header = "Delete" };
         delete.Click += (_, _) => DeleteSelection();
         menu.Items.Add(delete);
         menu.IsOpen = true;
-        return true;
+    }
+
+    private void Watermark_Click(object sender, RoutedEventArgs e)
+    {
+        CommitEditor();
+        EndPageBreak();
+        if (ShapeDialogs.AskWatermark(this, Doc.PageCount) is not { } mark) return;
+        int page = _page, pages = Doc.PageCount;
+        _selection = null;
+        bool added = Edit(d =>
+        {
+            if (!mark.EveryPage) d.AddWatermark(page, mark.Text, mark.Options);
+            else for (int i = 0; i < pages; i++) d.AddWatermark(i, mark.Text, mark.Options);
+        });
+        if (added) ShowStatus(mark.EveryPage ? $"Watermark added to all {pages} pages. Undo takes it off." : "Watermark added. To take it off, click it with Select and press Delete, or Undo.");
     }
 
     // ------------------------------------------------------------------ typing on the page
@@ -1436,7 +1496,9 @@ public partial class PdfEditorControl : UserControl
         var image = _images.LastOrDefault(i => i.Bounds.Contains(p.X, p.Y));
         if (image is null)
         {
-            e.Handled = ShowGradientMenu(p) || ShowDrawingMenu(p);
+            if (ShowGradientMenu(p)) { e.Handled = true; return; }
+            if (HitTest(p) is { Kind: ItemKind.Text } text) { ShowTextMenu(text); e.Handled = true; return; }
+            e.Handled = ShowDrawingMenu(p);
             return;
         }
         Focus();
@@ -1454,6 +1516,8 @@ public partial class PdfEditorControl : UserControl
         Add("Rotate left", () => RotateSelectedImage(image, -90));
         Add("Resize image...", () => ResizeImage(image));
         Add("Replace image...", () => ReplaceImage(image));
+        menu.Items.Add(new Separator());
+        AddLayerItems(menu, [image.ObjectIndex]);
         menu.Items.Add(new Separator());
         Add("Delete image", DeleteSelection);
         menu.IsOpen = true;

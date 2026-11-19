@@ -54,6 +54,7 @@
                 <RadioButton Style="{DynamicResource ToolRadio}" GroupName="Tool" Content="Highlight" Tag="Highlight" Checked="Tool_Checked" ToolTip="Drag across text to highlight it" />
                 <RadioButton Style="{DynamicResource ToolRadio}" GroupName="Tool" Content="Comment" Tag="Comment" Checked="Tool_Checked" ToolTip="Click on the page to leave a comment" />
                 <Button Content="Image" Click="AddImage_Click" ToolTip="Place an image on this page" />
+                <Button Content="Watermark" Click="Watermark_Click" ToolTip="Write a word such as DRAFT large and see-through across this page, or every page" />
                 <Border Style="{DynamicResource ToolSeparator}" />
                 <Button Content="Find &amp; replace" Click="FindReplace_Click" ToolTip="Replace text throughout the document; changed paragraphs re-flow (Ctrl+H)" />
             </StackPanel>

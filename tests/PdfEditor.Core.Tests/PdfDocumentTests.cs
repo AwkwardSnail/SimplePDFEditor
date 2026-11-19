@@ -876,6 +876,86 @@ public class PdfDocumentTests
         Assert.True(Near(At(again, 115, 60), red), "the arrow's head keeps the line's colour");
     }
 
+    [Fact]
+    public void Items_can_be_moved_a_layer_up_or_down_and_a_shape_given_another_line()
+    {
+        using var doc = PdfDocument.Create();
+        doc.AddPage(400, 400);
+        var red = new PdfColor(220, 0, 0);
+        var blue = new PdfColor(0, 0, 220);
+        var green = new PdfColor(0, 160, 0);
+        int first = doc.AddShape(0, ShapeKind.Box, [new(50, 50), new(200, 200)], new ShapeStyle { Stroke = red, Fill = red });
+        int apart = doc.AddShape(0, ShapeKind.Box, [new(300, 300), new(350, 350)], new ShapeStyle { Stroke = green, Fill = green });
+        int second = doc.AddShape(0, ShapeKind.Box, [new(100, 100), new(250, 250)], new ShapeStyle { Stroke = blue, Fill = blue });
+
+        PdfColor At(int x, int y)
+        {
+            var r = doc.Render(0, 1, false);
+            int i = (y * r.Width + x) * 4;
+            return new PdfColor(r.Pixels[i + 2], r.Pixels[i + 1], r.Pixels[i]);
+        }
+        static bool Near(PdfColor a, PdfColor b) => Math.Abs(a.R - b.R) + Math.Abs(a.G - b.G) + Math.Abs(a.B - b.B) < 60;
+        Assert.True(Near(At(150, 150), blue), "the later box is in front");
+
+        // One layer down takes it behind the box it overlaps, passing the one that lies apart.
+        Assert.True(doc.MoveLayer(0, [second], up: false));
+        Assert.True(Near(At(150, 150), red), "the red box is in front now");
+        Assert.False(doc.MoveLayer(0, [0], up: false), "it is at the back already");
+        Assert.True(doc.MoveLayer(0, [0], up: true));
+        Assert.True(Near(At(150, 150), blue), "and back in front");
+        Assert.True(Near(At(325, 325), green), "the box that lies apart is untouched");
+        Assert.Equal(3, doc.GetDrawings(0).Sum(d => d.ObjectIndices.Count));
+        _ = (first, apart);
+
+        // A new line for a shape: colour and thickness, read back as set.
+        int box = doc.GetDrawings(0).Single(d => d.Bounds.Contains(325, 325)).ObjectIndices[0];
+        Assert.Equal(1, doc.SetShapeLine(0, [box], red, 6));
+        var style = doc.GetShapeStyle(0, box)!;
+        Assert.Equal((red, 6.0, green), (style.Stroke, style.Width, style.Fill!.Value));
+        using var saved = PdfDocument.Open(doc.ToBytes());
+        Assert.Equal(6, saved.GetShapeStyle(0, box)!.Width, 0.01);
+    }
+
+    [Theory]
+    [InlineData(0, true)]
+    [InlineData(90, true)]
+    [InlineData(0, false)]
+    public void A_watermark_lies_across_the_middle_of_the_page_over_its_content(int rotation, bool diagonal)
+    {
+        using var doc = PdfDocument.Open(Path.Combine(AppContext.BaseDirectory, "Fixtures", "word-style.pdf"));
+        doc.SetPageRotation(0, rotation);
+        var page = doc.GetPageSize(0);
+        string before = doc.GetPageText(0);
+        int runs = doc.GetTextRuns(0).Count;
+
+        doc.AddWatermark(0, "DRAFT", new WatermarkOptions { Diagonal = diagonal, Opacity = 0.3, Color = new PdfColor(200, 0, 0) });
+        using var saved = PdfDocument.Open(doc.ToBytes());
+        var mark = saved.GetTextRuns(0)[^1];
+        Assert.Equal("DRAFT", mark.Text);
+        Assert.Equal(runs + 1, saved.GetTextRuns(0).Count);
+        Assert.Contains(before.Trim()[..40], saved.GetPageText(0));
+
+        // In the middle, inside the page, and large.
+        Assert.Equal(page.Width / 2, mark.Bounds.X + mark.Bounds.Width / 2, page.Width * 0.03);
+        Assert.Equal(page.Height / 2, mark.Bounds.Y + mark.Bounds.Height / 2, page.Height * 0.03);
+        Assert.True(mark.Bounds.X >= 0 && mark.Bounds.Y >= 0 && mark.Bounds.Right <= page.Width && mark.Bounds.Bottom <= page.Height, $"it runs off the page: {mark.Bounds}");
+        Assert.True(mark.Bounds.Width > page.Width * 0.5, $"it is small: {mark.Bounds}");
+        Assert.Equal(diagonal, mark.Bounds.Height > mark.Bounds.Width * 0.5);
+
+        // See-through red: pale red somewhere in the middle, never solid.
+        var picture = saved.Render(0, 1, false);
+        int pale = 0, solid = 0;
+        for (int i = 0; i < picture.Pixels.Length; i += 4)
+        {
+            int b = picture.Pixels[i], g = picture.Pixels[i + 1], r = picture.Pixels[i + 2];
+            if (r > 220 && g is > 150 and < 215 && b is > 150 and < 215) pale++;
+            if (r > 180 && g < 60 && b < 60) solid++;
+        }
+        Assert.True(pale > 2000, $"only {pale} pale red pixels");
+        Assert.Equal(0, solid);
+        Assert.Throws<ArgumentException>(() => doc.AddWatermark(0, "  "));
+    }
+
     /// <summary>A green box, a red-to-blue gradient, and a "gradient" that is black all over (as some programs write a transparent one).</summary>
     internal static byte[] PdfWithGradients()
     {
