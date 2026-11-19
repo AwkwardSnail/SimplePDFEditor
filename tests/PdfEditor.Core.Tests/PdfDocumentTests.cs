@@ -733,7 +733,7 @@ public class PdfDocumentTests
         for (int i = 0; i < 4; i++) Assert.Equal(auto.Render(i, 1, false).Pixels, byHand.Render(i, 1, false).Pixels);
 
         // Two sheets, one upright and one on its side, saved in the order given and each with its own paper.
-        TileSheet[] two = [new(-14, -14, 419.5, 595.3), new(100, 300, 595.3, 419.5)];
+        TileSheet[] two = [new(-14, -14, 419.5, 595.3), new(100, 300, 595.3, 419.5, Margin: 30)]; // the second has a wider blank edge of its own
         using var mixed = doc.CreateTiles(0, two, options);
         Assert.Equal(2, mixed.PageCount);
         Assert.Equal(419.5, mixed.GetPageSize(0).Width, 0.1);

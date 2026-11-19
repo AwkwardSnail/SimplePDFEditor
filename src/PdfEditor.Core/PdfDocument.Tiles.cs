@@ -31,9 +31,10 @@ public readonly record struct TileLayout(int Columns, int Rows, double Scale, do
 /// <summary>
 /// One sheet of paper laid on a page: where its top-left corner lies on the page as seen (in the
 /// page's own points, before any scaling), and the paper's size. At scale 2 a sheet covers half
-/// its paper's width and height of the page.
+/// its paper's width and height of the page. A sheet may have a blank edge of its own; without
+/// one it takes the options' margin.
 /// </summary>
-public readonly record struct TileSheet(double X, double Y, double PaperWidth, double PaperHeight);
+public readonly record struct TileSheet(double X, double Y, double PaperWidth, double PaperHeight, double? Margin = null);
 
 public sealed unsafe partial class PdfDocument
 {
@@ -118,8 +119,8 @@ public sealed unsafe partial class PdfDocument
 
     /// <summary>
     /// As <see cref="CreateTiles(int, TileOptions)"/>, but with each sheet placed by hand. The
-    /// options give the scale, the blank edge and whether to draw marks; the paper comes from each
-    /// sheet, and the sheets are saved in the order given.
+    /// options give the scale, whether to draw marks and the blank edge of any sheet that has none
+    /// of its own; the paper comes from each sheet, and the sheets are saved in the order given.
     /// </summary>
     public PdfDocument CreateTiles(int pageIndex, IReadOnlyList<TileSheet> sheets, TileOptions options)
     {
@@ -127,16 +128,19 @@ public sealed unsafe partial class PdfDocument
         if (sheets.Count > MaxTileSheets) throw new PdfException($"That would take {sheets.Count} sheets. Use fewer.");
         if (options.Margin < 0 || options.Scale <= 0) throw new ArgumentException("The margin and scale cannot be negative.");
         var size = GetPageSize(pageIndex);
-        double scale = options.Scale, margin = options.Margin;
+        double scale = options.Scale;
         foreach (var s in sheets)
-            if (s.PaperWidth - 2 * margin < 36 || s.PaperHeight - 2 * margin < 36)
+        {
+            double m = s.Margin ?? options.Margin;
+            if (m < 0 || s.PaperWidth - 2 * m < 36 || s.PaperHeight - 2 * m < 36)
                 throw new ArgumentException("The margin leaves too little of the paper to print on.");
+        }
 
         var plans = new List<SheetPlan>(sheets.Count);
         for (int i = 0; i < sheets.Count; i++)
         {
             var sheet = sheets[i];
-            double left = -sheet.X * scale, top = -sheet.Y * scale;
+            double left = -sheet.X * scale, top = -sheet.Y * scale, margin = sheet.Margin ?? options.Margin;
             // Marks where the poster ends, and where each sheet that shares picture with this one starts.
             var markX = new List<double> { left, left + size.Width * scale };
             var markY = new List<double> { top, top + size.Height * scale };
@@ -145,11 +149,13 @@ public sealed unsafe partial class PdfDocument
                 if (j == i) continue;
                 var other = sheets[j];
                 double dx = (other.X - sheet.X) * scale, dy = (other.Y - sheet.Y) * scale; // the other sheet's corner, on this one
-                bool share = dx + other.PaperWidth - margin > margin && dx + margin < sheet.PaperWidth - margin &&
-                             dy + other.PaperHeight - margin > margin && dy + margin < sheet.PaperHeight - margin;
+                double theirs = other.Margin ?? options.Margin;
+                bool share = dx + other.PaperWidth - theirs > margin && dx + theirs < sheet.PaperWidth - margin &&
+                             dy + other.PaperHeight - theirs > margin && dy + theirs < sheet.PaperHeight - margin;
                 if (!share) continue;
-                if (dx > 0.5) markX.Add(margin + dx);
-                if (dy > 0.5) markY.Add(margin + dy);
+                // Where the other sheet's printed area starts, when that is inside this one's.
+                if (dx + theirs > margin + 0.5) markX.Add(dx + theirs);
+                if (dy + theirs > margin + 0.5) markY.Add(dy + theirs);
             }
             plans.Add(new SheetPlan(sheet, markX, markY, sheets.Count > 1 ? $"Sheet {i + 1} of {sheets.Count}" : null));
         }
@@ -164,7 +170,7 @@ public sealed unsafe partial class PdfDocument
     private PdfDocument MakeTiles(int pageIndex, IReadOnlyList<SheetPlan> plans, TileOptions options)
     {
         var size = GetPageSize(pageIndex);
-        double margin = options.Margin, scale = options.Scale;
+        double scale = options.Scale;
 
         // What is on the page, as one box in the page as seen (top-left origin). Used below to find
         // out where PDFium's copy of the page puts things.
@@ -211,7 +217,7 @@ public sealed unsafe partial class PdfDocument
             for (int index = 0; index < plans.Count; index++)
             {
                 var plan = plans[index];
-                double paperW = plan.Sheet.PaperWidth, paperH = plan.Sheet.PaperHeight;
+                double paperW = plan.Sheet.PaperWidth, paperH = plan.Sheet.PaperHeight, margin = plan.Sheet.Margin ?? options.Margin;
                 var sheet = Native.FPDFPage_New(result.Doc, index, paperW, paperH);
                 if (sheet == IntPtr.Zero) throw new PdfException("Could not add a sheet.");
                 try

@@ -25,11 +25,17 @@ internal static class TilesDialog
         ("A4", 210, 297), ("A3", 297, 420), ("A5", 148, 210), ("Letter", 215.9, 279.4), ("Legal", 215.9, 355.6),
     ];
 
-    /// <summary>A sheet placed by hand: its top-left corner on the page (in the page's points) and which way it is turned.</summary>
+    /// <summary>
+    /// A sheet placed by hand: its top-left corner on the page (in the page's points), its paper
+    /// (a place in <see cref="Papers"/>), which way it is turned and its blank edge in millimetres.
+    /// </summary>
     private sealed class ManualSheet
     {
         public double X, Y;
+        public int Paper;
         public bool Landscape;
+        public double Margin = 5;
+        public bool MarginOk = true; // false while what is typed for the blank edge cannot be used
     }
 
     /// <summary>Returns what was chosen, or null when cancelled. The picture is the page, drawn small.</summary>
@@ -77,7 +83,8 @@ internal static class TilesDialog
         var view = new SheetsView { Width = 460, Height = 520, Page = page, Picture = picture, Focusable = true, FocusVisualStyle = null };
         var placed = new List<ManualSheet>();
         int selected = -1;
-        bool syncing = false;
+        var rows = new StackPanel();          // the table of sheets: one row each
+        var rowBorders = new List<Border>();
 
         // The paper as it stands in the list, upright, in points.
         (double W, double H) Paper()
@@ -129,20 +136,28 @@ internal static class TilesDialog
 
         TileOptions? ReadManual(out string problem)
         {
-            if (ReadShared(out problem) is not { } options) return null;
+            // Each sheet has its own paper and blank edge, so only the overlap and scale are shared.
+            problem = "";
+            if (!TryParse(overlap.Text, out double o) || o < 0 || o > 50) { problem = "Enter an overlap between 0 and 50 mm."; return null; }
             if (!TryParse(manualPercent.Text, out double p) || p < 5 || p > 2000) { problem = "Enter a scale between 5 and 2000 per cent."; return null; }
-            if (options.PaperWidth - 2 * options.Margin < 36) { problem = "The blank edge leaves too little of the paper to print on."; return null; }
-            return options with { Scale = p / 100 };
+            int bad = placed.FindIndex(s => !s.MarginOk);
+            if (bad >= 0) { problem = $"Enter a blank edge between 0 and 30 mm for sheet {bad + 1}."; return null; }
+            return new TileOptions { Overlap = o * PointsPerMillimetre, Margin = 0, Scale = p / 100, CutMarks = marks.IsChecked == true };
         }
 
         // A hand-placed sheet as the engine wants it.
-        TileSheet Sheet(ManualSheet s, TileOptions o) =>
-            s.Landscape ? new TileSheet(s.X, s.Y, o.PaperHeight, o.PaperWidth) : new TileSheet(s.X, s.Y, o.PaperWidth, o.PaperHeight);
+        TileSheet Sheet(ManualSheet s)
+        {
+            var (_, w, h) = Papers[s.Paper];
+            if (s.Landscape) (w, h) = (h, w);
+            return new TileSheet(s.X, s.Y, w * PointsPerMillimetre, h * PointsPerMillimetre, s.Margin * PointsPerMillimetre);
+        }
 
         // In Manual the page is shown with room around it, so a sheet can hang over any edge.
         Rect ManualBounds(TileOptions o)
         {
-            double room = Math.Max(o.PaperWidth, o.PaperHeight) / o.Scale / 2;
+            double longest = placed.Count == 0 ? 297 : placed.Max(s => Math.Max(Papers[s.Paper].Width, Papers[s.Paper].Height));
+            double room = longest * PointsPerMillimetre / o.Scale / 2;
             return new Rect(-room, -room, page.Width + 2 * room, page.Height + 2 * room);
         }
 
@@ -151,7 +166,7 @@ internal static class TilesDialog
             var bounds = ManualBounds(o);
             foreach (var s in placed)
             {
-                var sheet = Sheet(s, o);
+                var sheet = Sheet(s);
                 double w = sheet.PaperWidth / o.Scale, h = sheet.PaperHeight / o.Scale;
                 s.X = Math.Max(bounds.Left, Math.Min(bounds.Right - w, s.X));
                 s.Y = Math.Max(bounds.Top, Math.Min(bounds.Bottom - h, s.Y));
@@ -178,7 +193,7 @@ internal static class TilesDialog
                 }
                 add.IsEnabled = placed.Count < 400;
                 KeepInView(options);
-                var sheets = placed.Select(s => Sheet(s, options)).ToList();
+                var sheets = placed.Select(Sheet).ToList();
                 view.Show(sheets, options, ManualBounds(options));
                 ok.IsEnabled = sheets.Count > 0;
                 if (sheets.Count == 0) summary.Text = "Choose + to add a sheet, then drag it into place over the page.";
@@ -210,44 +225,98 @@ internal static class TilesDialog
                            $"{Math.Round(plan.Scale * 100):0}% of the page's size.";
         }
 
-        void Select(int index)
+        // The selected sheet's row is picked out in the table.
+        void MarkRows()
+        {
+            for (int i = 0; i < rowBorders.Count; i++)
+                rowBorders[i].Background = i == selected ? Lookup("SelectBrush", Brushes.DarkSlateGray) : Brushes.Transparent;
+        }
+
+        void Select(int index, bool show = true)
         {
             selected = index;
-            if (index >= 0)
-            {
-                // The orientation shown is the selected sheet's.
-                syncing = true;
-                (placed[index].Landscape ? landscape : portrait).IsChecked = true;
-                syncing = false;
-            }
+            MarkRows();
+            if (show && index >= 0 && index < rowBorders.Count) rowBorders[index].BringIntoView();
             Update();
+        }
+
+        // One row of the table for each sheet: its number, paper, which way up, and blank edge.
+        void RebuildRows()
+        {
+            rows.Children.Clear();
+            rowBorders.Clear();
+            foreach (var s in placed)
+            {
+                var sheet = s;
+                var number = new TextBlock { Text = (placed.IndexOf(s) + 1).ToString(CultureInfo.CurrentCulture), Width = 22, VerticalAlignment = VerticalAlignment.Center, TextAlignment = System.Windows.TextAlignment.Center };
+                var size = new ComboBox { Width = 78, Margin = new Thickness(0, 0, 4, 0), ToolTip = "The paper this sheet is printed on" };
+                foreach (var (name, _, _) in Papers) size.Items.Add(name);
+                size.SelectedIndex = s.Paper;
+                var way = new ComboBox { Width = 104, Margin = new Thickness(0, 0, 4, 0) };
+                way.Items.Add("Portrait");
+                way.Items.Add("Landscape");
+                way.SelectedIndex = s.Landscape ? 1 : 0;
+                var edge = new TextBox { Width = 44, Text = s.Margin.ToString("0.#", CultureInfo.CurrentCulture), ToolTip = "The blank edge this sheet's printer cannot reach, in millimetres" };
+                AutomationProperties.SetName(size, $"Paper for sheet {number.Text}");
+                AutomationProperties.SetName(way, $"Which way up for sheet {number.Text}");
+                AutomationProperties.SetName(edge, $"Blank edge for sheet {number.Text}");
+                size.SelectionChanged += (_, _) => { sheet.Paper = Math.Max(0, size.SelectedIndex); Update(); };
+                way.SelectionChanged += (_, _) => { sheet.Landscape = way.SelectedIndex == 1; Update(); };
+                edge.TextChanged += (_, _) =>
+                {
+                    sheet.MarginOk = TryParse(edge.Text, out double m) && m >= 0 && m <= 30;
+                    if (sheet.MarginOk) sheet.Margin = m;
+                    Update();
+                };
+
+                var line = new StackPanel { Orientation = Orientation.Horizontal };
+                line.Children.Add(number);
+                line.Children.Add(size);
+                line.Children.Add(way);
+                line.Children.Add(edge);
+                line.Children.Add(new TextBlock { Text = "mm", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(5, 0, 0, 0) });
+                var border = new Border { Child = line, Padding = new Thickness(0, 3, 0, 3), Background = Brushes.Transparent };
+                // Working in a row, or clicking it, selects its sheet.
+                void Pick() { int i = placed.IndexOf(sheet); if (i >= 0 && i != selected) Select(i, show: false); }
+                border.PreviewMouseLeftButtonDown += (_, _) => Pick();
+                border.GotKeyboardFocus += (_, _) => Pick();
+                rows.Children.Add(border);
+                rowBorders.Add(border);
+            }
         }
 
         void AddSheet()
         {
             if (ReadManual(out _) is not { } o) return;
-            var sheet = new ManualSheet { Landscape = landscape.IsChecked == true };
-            double edge = o.Margin / o.Scale;
+            // A new sheet is like the selected one (or the last); the first takes Auto's paper and blank edge.
+            var like = selected >= 0 && selected < placed.Count ? placed[selected] : placed.LastOrDefault();
+            var sheet = new ManualSheet
+            {
+                Paper = like?.Paper ?? Math.Max(0, paper.SelectedIndex),
+                Landscape = like?.Landscape ?? landscape.IsChecked == true,
+                Margin = like?.Margin ?? (TryParse(margin.Text, out double typed) && typed >= 0 && typed <= 30 ? typed : 5),
+            };
+            var own = Sheet(sheet);
+            double edge = sheet.Margin * PointsPerMillimetre / o.Scale, w = own.PaperWidth / o.Scale, h = own.PaperHeight / o.Scale;
             if (placed.Count == 0) (sheet.X, sheet.Y) = (-edge, -edge); // its printed area starts at the page's corner
             else
             {
-                // Beside the last one, sharing the overlap; onto a new row once past the page's right edge.
-                var last = Sheet(placed[^1], o);
-                double shared = 2 * edge + o.Overlap / o.Scale;
-                sheet.X = last.X + last.PaperWidth / o.Scale - shared;
-                sheet.Y = last.Y;
-                var own = Sheet(sheet, o);
-                double w = own.PaperWidth / o.Scale, h = own.PaperHeight / o.Scale;
+                // Beside the last one, their printed areas sharing the overlap; onto a new row once past the page's right edge.
+                var last = Sheet(placed[^1]);
+                double lastEdge = placed[^1].Margin * PointsPerMillimetre / o.Scale, shared = o.Overlap / o.Scale;
+                sheet.X = last.X + last.PaperWidth / o.Scale - lastEdge - shared - edge;
+                sheet.Y = last.Y + lastEdge - edge;
                 // "Past the edge" is when less than a quarter of its printed area would still be on the page.
                 if (sheet.X + edge + (w - 2 * edge) / 4 > page.Width)
                 {
                     sheet.X = -edge;
-                    sheet.Y = last.Y + last.PaperHeight / o.Scale - shared;
+                    sheet.Y = last.Y + last.PaperHeight / o.Scale - lastEdge - shared - edge;
                     // No room below either: in the middle of the page, for the user to place.
                     if (sheet.Y + edge + (h - 2 * edge) / 4 > page.Height) (sheet.X, sheet.Y) = ((page.Width - w) / 2, (page.Height - h) / 2);
                 }
             }
             placed.Add(sheet);
+            RebuildRows();
             Select(placed.Count - 1);
             view.Focus();
         }
@@ -256,6 +325,7 @@ internal static class TilesDialog
         {
             if (selected < 0 || selected >= placed.Count) return;
             placed.RemoveAt(selected);
+            RebuildRows();
             Select(Math.Min(selected, placed.Count - 1));
         }
 
@@ -307,14 +377,7 @@ internal static class TilesDialog
         remove.Click += (_, _) => RemoveSheet();
         paper.SelectionChanged += (_, _) => Update();
         foreach (var radio in new[] { actual, fit, scaled }) radio.Checked += (_, _) => Update();
-        foreach (var radio in new[] { portrait, landscape })
-            radio.Checked += (_, _) =>
-            {
-                if (syncing) return;
-                // In Manual the choice turns the selected sheet, and is used for the next one added.
-                if (manual.IsChecked == true && selected >= 0) placed[selected].Landscape = landscape.IsChecked == true;
-                Update();
-            };
+        foreach (var radio in new[] { portrait, landscape }) radio.Checked += (_, _) => Update();
         foreach (var box in new[] { across, down, percent, manualPercent, overlap, margin }) box.TextChanged += (_, _) => Update();
         marks.Click += (_, _) => Update();
 
@@ -330,9 +393,11 @@ internal static class TilesDialog
         TextBlock Note(string text) => new() { Text = text, TextWrapping = TextWrapping.Wrap, Opacity = 0.65, Margin = new Thickness(0, 0, 0, 6) };
 
         panel.Children.Add(Row(auto, manual));
-        panel.Children.Add(Heading("Paper to print on"));
-        panel.Children.Add(Row(paper));
-        panel.Children.Add(Row(portrait, landscape));
+        var paperPart = new StackPanel();
+        paperPart.Children.Add(Heading("Paper to print on"));
+        paperPart.Children.Add(Row(paper));
+        paperPart.Children.Add(Row(portrait, landscape));
+        panel.Children.Add(paperPart);
         panel.Children.Add(Heading("Size of the poster"));
         var autoSize = new StackPanel();
         autoSize.Children.Add(actual);
@@ -346,7 +411,14 @@ internal static class TilesDialog
         var sheetsPart = new StackPanel { Visibility = Visibility.Collapsed };
         sheetsPart.Children.Add(Heading("Sheets"));
         sheetsPart.Children.Add(Row(add, remove));
-        sheetsPart.Children.Add(Note("Drag a sheet to place it; the arrow keys move it 1 mm. Portrait and Landscape turn the selected sheet."));
+        TextBlock Column(string text, double width) => new() { Text = text, Width = width, Opacity = 0.65, FontSize = 12 };
+        sheetsPart.Children.Add(Row(Column("", 22), Column("Paper", 82), Column("Way up", 108), Column("Blank edge", 80)));
+        sheetsPart.Children.Add(new ScrollViewer
+        {
+            Content = rows, Height = 190, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            Margin = new Thickness(0, 0, 0, 6), Focusable = false,
+        });
+        sheetsPart.Children.Add(Note("Drag a sheet to place it; the arrow keys move it 1 mm. A new sheet starts like the selected one."));
         panel.Children.Add(sheetsPart);
 
         panel.Children.Add(Heading("Joining the sheets"));
@@ -359,7 +431,8 @@ internal static class TilesDialog
         var mm2 = Words("mm");
         mm2.Margin = new Thickness(6, 0, 0, 0);
         panel.Children.Add(Row(overlapLabel, overlap, mm1));
-        panel.Children.Add(Row(marginLabel, margin, mm2));
+        var marginRow = Row(marginLabel, margin, mm2);
+        panel.Children.Add(marginRow);
         panel.Children.Add(marks);
         panel.Children.Add(summary);
 
@@ -369,6 +442,8 @@ internal static class TilesDialog
                 bool isManual = manual.IsChecked == true;
                 autoSize.Visibility = isManual ? Visibility.Collapsed : Visibility.Visible;
                 manualSize.Visibility = sheetsPart.Visibility = isManual ? Visibility.Visible : Visibility.Collapsed;
+                // In Manual each sheet has its own paper and blank edge, in the table.
+                paperPart.Visibility = marginRow.Visibility = isManual ? Visibility.Collapsed : Visibility.Visible;
                 overlapLabel.Text = isManual ? "Overlap for the next sheet added" : "Overlap between sheets";
                 Update();
             };
@@ -378,7 +453,7 @@ internal static class TilesDialog
         {
             if (manual.IsChecked == true)
             {
-                if (ReadManual(out _) is { } o && placed.Count > 0) result = new TilesChoice(o, placed.Select(s => Sheet(s, o)).ToList());
+                if (ReadManual(out _) is { } o && placed.Count > 0) result = new TilesChoice(o, placed.Select(Sheet).ToList());
             }
             else if (ReadAuto(out _) is { } o) result = new TilesChoice(o, null);
             if (result is not null) window.DialogResult = true;
@@ -417,8 +492,11 @@ internal static class TilesDialog
     private static double Uncovered(PdfSize page, IReadOnlyList<TileSheet> sheets, TileOptions o)
     {
         if (sheets.Count > 60) return 0; // too many to be worth working out on every mouse move
-        double edge = o.Margin / o.Scale;
-        var areas = sheets.Select(s => new Rect(s.X + edge, s.Y + edge, Math.Max(0, s.PaperWidth / o.Scale - 2 * edge), Math.Max(0, s.PaperHeight / o.Scale - 2 * edge))).ToList();
+        var areas = sheets.Select(s =>
+        {
+            double edge = (s.Margin ?? o.Margin) / o.Scale;
+            return new Rect(s.X + edge, s.Y + edge, Math.Max(0, s.PaperWidth / o.Scale - 2 * edge), Math.Max(0, s.PaperHeight / o.Scale - 2 * edge));
+        }).ToList();
         var xs = new SortedSet<double> { 0, page.Width };
         var ys = new SortedSet<double> { 0, page.Height };
         foreach (var a in areas)
@@ -469,12 +547,12 @@ internal static class TilesDialog
         public bool Numbered;
 
         private IReadOnlyList<TileSheet> _sheets = [];
-        private double _scale = 1, _edge;       // the blank edge, in the page's points
+        private double _scale = 1, _margin;     // the blank edge of sheets without their own, in paper points
         private Rect _bounds = new(0, 0, 1, 1); // the part of the page's plane that is shown
 
         public void Show(IReadOnlyList<TileSheet> sheets, TileOptions options, Rect bounds)
         {
-            (_sheets, _scale, _edge, _bounds) = (sheets, options.Scale, options.Margin / options.Scale, bounds);
+            (_sheets, _scale, _margin, _bounds) = (sheets, options.Scale, options.Margin, bounds);
             InvalidateVisual();
         }
 
@@ -509,7 +587,8 @@ internal static class TilesDialog
         private Rect PrintedOf(TileSheet s)
         {
             var p = PaperOf(s);
-            return new Rect(p.X + _edge, p.Y + _edge, Math.Max(0, p.Width - 2 * _edge), Math.Max(0, p.Height - 2 * _edge));
+            double edge = (s.Margin ?? _margin) / _scale; // in the page's points
+            return new Rect(p.X + edge, p.Y + edge, Math.Max(0, p.Width - 2 * edge), Math.Max(0, p.Height - 2 * edge));
         }
 
         /// <summary>The sheet under a point of the page: the one given first if it is there, otherwise the last added. -1 for none.</summary>
