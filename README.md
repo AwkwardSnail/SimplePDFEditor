@@ -97,7 +97,9 @@ Scrolling past the end of a page carries on to the next page. The page list on t
 
 **Images**: right-click an image to edit it in Paint (save there, confirm in the editor, and the edited picture takes its place), rotate it left or right, resize it to a size in millimetres, replace it with another picture, or delete it.
 
-**Page break**: select an item and choose Page break; it and everything below it move to a new page inserted after the current one, starting at the top margin. Footers stay on their page, and comments and highlights go with their text.
+**Page break**: select an item and choose Page break; it and everything below it move to a new page inserted after the current one, starting at the top margin. Footers stay on their page, and comments, highlights and web links go with their text. With nothing selected, Page break shows a line that follows the mouse and settles in the gaps between rows of content; a click breaks the page there (Esc cancels). A very long page, such as a web page saved as one sheet, is cut like paper instead: it ends at the line and the rest goes onto a new page just tall enough for it. Content is moved, never copied, so the file does not grow.
+
+**Add page** asks for the new page's size: the same as the current page, A3, A4, A5, Letter, Legal or any size in millimetres, portrait or landscape. The size can be kept for every new page; hold Shift while choosing Add page to be asked again. The kept size is stored in a small file on this computer only.
 
 **Find & replace** (Ctrl+H) replaces text throughout the document and re-flows each paragraph it changes.
 

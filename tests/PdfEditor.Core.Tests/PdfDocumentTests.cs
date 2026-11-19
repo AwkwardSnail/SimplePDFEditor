@@ -666,6 +666,82 @@ public class PdfDocumentTests
         Assert.Contains("Group text", saved.GetPageText(0));
     }
 
+    private static byte[] HandMadePdf(string mediaBox, string content, string pageExtras = "") =>
+        System.Text.Encoding.ASCII.GetBytes(
+            "%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n" +
+            $"3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[{mediaBox}]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>{pageExtras}>>endobj\n" +
+            $"4 0 obj<</Length {content.Length}>>stream\n{content}\nendstream endobj\n" +
+            "5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF");
+
+    [Fact]
+    public void A_clipped_item_keeps_its_clip_when_it_moves()
+    {
+        // A blue rectangle seen through a smaller clip window. PDFium moves an object and its clip
+        // separately; moved without its clip, the rectangle would slide out from behind the window and vanish.
+        using var doc = PdfDocument.Open(HandMadePdf("0 0 612 792", "q 100 600 200 100 re W n 0 0 1 rg 50 550 300 200 re f Q"));
+        bool Blue(PdfDocument d, int x, int y) { var r = d.Render(0); int i = y * r.Stride + x * 4; return r.Pixels[i] > 200 && r.Pixels[i + 2] < 60; }
+        Assert.True(Blue(doc, 200, 792 - 650));
+        doc.MoveObjects(0, doc.GetDrawings(0).Single().ObjectIndices, 250, 40);
+        using var saved = Reopen(doc);
+        Assert.True(Blue(saved, 450, 792 - 650 + 40), "the visible window moved with the rectangle");
+        Assert.False(Blue(saved, 200, 792 - 650), "nothing is left behind");
+        Assert.False(Blue(saved, 330, 792 - 650 + 40), "and it is still clipped to the window, not shown whole");
+    }
+
+    [Fact]
+    public void A_long_page_can_be_cut_in_two()
+    {
+        // A page two metres long whose box does not start at the origin, with a web link low down.
+        const string link = "/Annots[<</Type/Annot/Subtype/Link/Rect[150 590 260 625]/Border[0 0 0]/A<</S/URI/URI(https://example.com/)>>>>]";
+        using var doc = PdfDocument.Open(HandMadePdf("100 100 500 2100",
+            "BT /F1 20 Tf 150 1900 Td (Top text) Tj ET BT /F1 20 Tf 150 1300 Td (Middle text) Tj ET BT /F1 20 Tf 150 600 Td (Low text) Tj ET 1 0 0 rg 150 400 100 50 re f", link));
+        Assert.Equal(new PdfSize(400, 2000), doc.GetPageSize(0));
+        var runs = doc.GetTextRuns(0);
+        var middle = runs.Single(r => r.Text == "Middle text");
+        var low = runs.Single(r => r.Text == "Low text");
+        var box = doc.GetDrawings(0).Single();
+
+        // The places where it can be cut are the gaps between the rows of content.
+        var gaps = doc.GetBreakPositions(0);
+        Assert.Equal(3, gaps.Count);
+        Assert.InRange(gaps[0], runs.Single(r => r.Text == "Top text").Bounds.Bottom, middle.Bounds.Y);
+        Assert.InRange(gaps[1], middle.Bounds.Bottom, low.Bounds.Y);
+
+        double cut = gaps[0];
+        Assert.Equal(3, doc.SplitPage(0, cut));
+        using var saved = Reopen(doc);
+        Assert.Equal(2, saved.PageCount);
+        Assert.Equal(400, saved.GetPageSize(0).Width, 0);
+        Assert.Equal(cut, saved.GetPageSize(0).Height, 0);              // the first page ends at the cut
+        Assert.Equal(2000 - cut, saved.GetPageSize(1).Height, 0);       // the second holds the rest, no taller
+        Assert.Equal("Top text", saved.GetTextRuns(0).Single().Text);
+        Assert.Empty(saved.GetDrawings(0));
+
+        // Everything below is the same distance from the cut as before, and no further left or right.
+        var after = saved.GetTextRuns(1);
+        var middleAfter = after.Single(r => r.Text == "Middle text");
+        var lowAfter = after.Single(r => r.Text == "Low text");
+        Assert.Equal(middle.Bounds.X, middleAfter.Bounds.X, 1);
+        Assert.Equal(middle.Bounds.Y - cut, middleAfter.Bounds.Y, 1);
+        Assert.Equal(low.Bounds.Y - cut, lowAfter.Bounds.Y, 1);
+        var boxAfter = saved.GetDrawings(1).Single();
+        Assert.Equal(new PdfRect(box.Bounds.X, box.Bounds.Y - cut, box.Bounds.Width, box.Bounds.Height), Round(boxAfter.Bounds) with { Y = Math.Round(boxAfter.Bounds.Y, 3) }, new RectComparer());
+
+        // The link went with its text and still covers it.
+        Assert.Empty(saved.GetAnnotations(0));
+        var moved = saved.GetAnnotations(1).Single();
+        Assert.True(moved.Bounds.Contains(lowAfter.Bounds.X + 5, lowAfter.Bounds.Y + lowAfter.Bounds.Height / 2), $"link at {moved.Bounds}, text at {lowAfter.Bounds}");
+
+        Assert.Equal(0, saved.SplitPage(0, 5000));                      // outside the page: nothing happens
+        Assert.Equal(2, saved.PageCount);
+    }
+
+    private sealed class RectComparer : IEqualityComparer<PdfRect>
+    {
+        public bool Equals(PdfRect a, PdfRect b) => Math.Abs(a.X - b.X) < 1 && Math.Abs(a.Y - b.Y) < 1 && Math.Abs(a.Width - b.Width) < 1 && Math.Abs(a.Height - b.Height) < 1;
+        public int GetHashCode(PdfRect r) => 0;
+    }
+
     [Fact]
     public void Bad_input_gives_clear_errors()
     {

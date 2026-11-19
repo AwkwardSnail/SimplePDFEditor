@@ -93,6 +93,17 @@ internal static unsafe class Native
     [DllImport(Lib)] public static extern IntPtr FPDFFont_GetGlyphPath(IntPtr font, uint glyph, float fontSize);
     [DllImport(Lib)] public static extern int FPDFGlyphPath_CountGlyphSegments(IntPtr glyphPath);
     [DllImport(Lib)] public static extern IntPtr FPDFGlyphPath_GetGlyphPathSegment(IntPtr glyphPath, int index);
+    [DllImport(Lib)] public static extern void FPDFPage_SetMediaBox(IntPtr page, float left, float bottom, float right, float top);
+    [DllImport(Lib)] public static extern void FPDFPage_SetCropBox(IntPtr page, float left, float bottom, float right, float top);
+    [DllImport(Lib)] public static extern int FPDFPage_GetCropBox(IntPtr page, float* left, float* bottom, float* right, float* top);
+    [DllImport(Lib)] public static extern void FPDFPageObj_TransformClipPath(IntPtr obj, double a, double b, double c, double d, double e, double f);
+    [DllImport(Lib)] public static extern IntPtr FPDFAnnot_GetLink(IntPtr annot);
+    [DllImport(Lib)] public static extern IntPtr FPDFLink_GetAction(IntPtr link);
+    [DllImport(Lib)] public static extern CULong FPDFAction_GetType(IntPtr action);
+    [DllImport(Lib)] public static extern CULong FPDFAction_GetURIPath(IntPtr doc, IntPtr action, byte* buffer, CULong length);
+    [DllImport(Lib)] public static extern int FPDFAnnot_SetURI(IntPtr annot, [MarshalAs(UnmanagedType.LPStr)] string uri);
+    [DllImport(Lib)] public static extern int FPDFAnnot_SetBorder(IntPtr annot, float horizontalRadius, float verticalRadius, float borderWidth);
+    [DllImport(Lib)] public static extern IntPtr FPDFTextObj_GetRenderedBitmap(IntPtr doc, IntPtr page, IntPtr textObj, float scale);
     [DllImport(Lib)] public static extern int FPDFFormObj_CountObjects(IntPtr formObj);
     [DllImport(Lib)] public static extern IntPtr FPDFFormObj_GetObject(IntPtr formObj, CULong index);
     [DllImport(Lib)] public static extern int FPDFPath_CountSegments(IntPtr path);

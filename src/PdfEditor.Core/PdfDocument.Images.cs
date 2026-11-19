@@ -182,10 +182,9 @@ public sealed unsafe partial class PdfDocument
         double cx = bounds.X + bounds.Width / 2, cy = bounds.Y + bounds.Height / 2;
         // A quarter turn clockwise in view space (y runs down): (x, y) -> (cx - (y - cy), cy + (x - cx)).
         var quarter = new Affine(0, 1, -1, 0, cx + cy, cy - cx);
-        var placement = Affine.Concat(new Affine(m.a, m.b, m.c, m.d, m.e, m.f), page.UserToView);
-        for (int i = 0; i < turns; i++) placement = Affine.Concat(placement, quarter);
-        var turned = Affine.Concat(placement, page.ViewToUser).ToNative();
-        Native.FPDFPageObj_SetMatrix(obj, &turned);
+        var turn = page.UserToView;
+        for (int i = 0; i < turns; i++) turn = Affine.Concat(turn, quarter);
+        TransformObject(obj, Affine.Concat(turn, page.ViewToUser));
         page.Dirty = page.ChangedExisting = true;
     }
 }

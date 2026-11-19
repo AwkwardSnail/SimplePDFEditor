@@ -607,7 +607,7 @@ public sealed unsafe partial class PdfDocument
         bool offPage = newBottom > page.Height + 0.5;
         foreach (var obj in move)
         {
-            Native.FPDFPageObj_Transform(obj, 1, 0, 0, 1, shiftUser.X, shiftUser.Y);
+            TransformObject(obj, new Affine(1, 0, 0, 1, shiftUser.X, shiftUser.Y));
             if (ObjectBounds(page, obj).Bottom > page.Height + 0.5) offPage = true;
         }
         foreach (var obj in rebuild)

@@ -14,8 +14,8 @@
                 <Button x:Name="RedoButton" Content="Redo" Click="Redo_Click" ToolTip="Redo (Ctrl+Y)" />
             </ToolBar>
             <ToolBar Band="0" BandIndex="1">
-                <Button Content="Add page" Click="AddPage_Click" ToolTip="Add a blank page after this one" />
-                <Button Content="Page break" Click="PageBreak_Click" ToolTip="Select an item first: it and everything below it move to a new page after this one" />
+                <Button Content="Add page" Click="AddPage_Click" ToolTip="Add a blank page after this one. Asks for its size; hold Shift to be asked again once a size is kept" />
+                <Button Content="Page break" Click="PageBreak_Click" ToolTip="Break this page in two. With an item selected, it and everything below it move to a new page; with nothing selected, a line follows the mouse and a click breaks the page there" />
                 <Button Content="Insert file" Click="InsertFile_Click" ToolTip="Insert the pages of a PDF, or an RTF document laid out as pages, after this page" />
                 <Button x:Name="DeletePageButton" Content="Delete page" Click="DeletePage_Click" ToolTip="Delete this page" />
                 <Button Content="Rotate" Click="Rotate_Click" ToolTip="Rotate this page a quarter turn clockwise" />
@@ -117,7 +117,7 @@
                         <Image x:Name="PageImage" Stretch="Fill" />
                         <Canvas x:Name="Overlay" Background="Transparent" ClipToBounds="True"
                                 MouseLeftButtonDown="Overlay_MouseDown" MouseMove="Overlay_MouseMove" MouseLeftButtonUp="Overlay_MouseUp"
-                                MouseRightButtonDown="Overlay_RightClick" />
+                                MouseRightButtonDown="Overlay_RightClick" MouseLeave="Overlay_MouseLeave" />
                     </Grid>
                 </Border>
             </ScrollViewer>

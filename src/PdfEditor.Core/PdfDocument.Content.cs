@@ -429,9 +429,7 @@ public sealed unsafe partial class PdfDocument
         // flip the image was stored with.
         double sx = bounds.Width / old.Width, sy = bounds.Height / old.Height;
         var stretch = new Affine(sx, 0, 0, sy, bounds.X - old.X * sx, bounds.Y - old.Y * sy);
-        var current = new Affine(m.a, m.b, m.c, m.d, m.e, m.f);
-        var placed = Affine.Concat(Affine.Concat(Affine.Concat(current, page.UserToView), stretch), page.ViewToUser).ToNative();
-        Native.FPDFPageObj_SetMatrix(obj, &placed);
+        TransformObject(obj, Affine.Concat(Affine.Concat(page.UserToView, stretch), page.ViewToUser));
         page.Dirty = page.ChangedExisting = true;
     }
 
@@ -468,13 +466,9 @@ public sealed unsafe partial class PdfDocument
     {
         using var page = OpenPage(pageIndex);
         var obj = GetObject(page, objectIndex);
-        Native.FS_MATRIX m;
-        if (Native.FPDFPageObj_GetMatrix(obj, &m) == 0) throw new PdfException("Could not move the item.");
         // Only the direction of the offset changes between spaces, not the origin.
         var v = page.ViewToUser;
-        m.e += (float)(v.A * dx + v.C * dy);
-        m.f += (float)(v.B * dx + v.D * dy);
-        Native.FPDFPageObj_SetMatrix(obj, &m);
+        TransformObject(obj, new Affine(1, 0, 0, 1, v.A * dx + v.C * dy, v.B * dx + v.D * dy));
         page.Dirty = page.ChangedExisting = true;
     }
 
@@ -533,7 +527,7 @@ public sealed unsafe partial class PdfDocument
         var v = page.ViewToUser;
         double ux = v.A * dx + v.C * dy, uy = v.B * dx + v.D * dy;
         foreach (var obj in objectIndices.Distinct().Select(i => GetObject(page, i)).ToList())
-            Native.FPDFPageObj_Transform(obj, 1, 0, 0, 1, ux, uy);
+            TransformObject(obj, new Affine(1, 0, 0, 1, ux, uy));
         page.Dirty = page.ChangedExisting = true;
     }
 
@@ -548,6 +542,17 @@ public sealed unsafe partial class PdfDocument
             Native.FPDFPageObj_Destroy(obj);
         }
         page.Dirty = page.ChangedExisting = true;
+    }
+
+    /// <summary>
+    /// Applies a transform (in the page's own coordinates) to an object and to its clip region.
+    /// The two are separate in PDFium: an object moved without its clip is cut off, or vanishes,
+    /// because the clip stays where the object used to be.
+    /// </summary>
+    internal static void TransformObject(IntPtr obj, Affine t)
+    {
+        Native.FPDFPageObj_Transform(obj, t.A, t.B, t.C, t.D, t.E, t.F);
+        Native.FPDFPageObj_TransformClipPath(obj, t.A, t.B, t.C, t.D, t.E, t.F);
     }
 
     private static IntPtr GetObject(PageHandle page, int objectIndex, int? requiredType = null, string what = "item")

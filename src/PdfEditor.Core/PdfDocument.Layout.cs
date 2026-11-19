@@ -33,7 +33,7 @@ public sealed unsafe partial class PdfDocument
             {
                 if (Native.FPDFText_IsGenerated(textPage, i) == 1) continue;
                 var obj = Native.FPDFText_GetTextObject(textPage, i);
-                if (obj == IntPtr.Zero || !indexOf.ContainsKey(obj) || page.NewObjects.Contains(obj)) continue;
+                if (obj == IntPtr.Zero || !indexOf.ContainsKey(obj)) continue;
                 double x, y;
                 Native.FPDFText_GetCharOrigin(textPage, i, &x, &y);
                 if (!chars.TryGetValue(obj, out var list)) chars[obj] = list = [];
@@ -43,19 +43,104 @@ public sealed unsafe partial class PdfDocument
         finally { Native.FPDFText_ClosePage(textPage); }
 
         var replacements = new List<(int Index, IntPtr Old, IntPtr New)>();
+        foreach (var glyphs in chars.Values) DropPhantomSpaces(glyphs);
+        SeparateSameNamedFonts(page, indexOf, chars, replacements);
         foreach (var (obj, glyphs) in chars)
         {
-            DropPhantomSpaces(glyphs);
+            if (page.NewObjects.Contains(obj)) continue; // made in this session: already written exactly as wanted
             var pinned = Pin(page, obj, glyphs);
             if (pinned != IntPtr.Zero) replacements.Add((indexOf[obj], obj, pinned));
         }
         // Highest index first, so inserting and removing does not shift the ones still to do.
         foreach (var (index, old, pinned) in replacements.OrderByDescending(r => r.Index))
         {
-            Native.FPDFPage_InsertObjectAtIndex(page.Handle, pinned, (nuint)index);
+            if (pinned != IntPtr.Zero) Native.FPDFPage_InsertObjectAtIndex(page.Handle, pinned, (nuint)index);
             Native.FPDFPage_RemoveObject(page.Handle, old);
             Native.FPDFPageObj_Destroy(old);
         }
+    }
+
+    /// <summary>
+    /// PDFium tells fonts apart only by name and kind when it writes a page. A page can hold
+    /// several different embedded fonts with one name (separate cuts, each with its own letters
+    /// and codes; PDFs made on macOS often do), and all their text would then be drawn with
+    /// whichever comes first: wrong or missing letters. So for each name the most-used font
+    /// keeps its text, and text in the others is redrawn as shapes that look the same: outlines
+    /// of its letters, or a small picture of it where the letters are not known.
+    /// </summary>
+    private void SeparateSameNamedFonts(PageHandle page, Dictionary<IntPtr, int> indexOf,
+        Dictionary<IntPtr, List<(char Ch, double X, double Y)>> chars, List<(int Index, IntPtr Old, IntPtr New)> replacements)
+    {
+        var textObjects = new List<(IntPtr Obj, IntPtr Font, string Name)>();
+        var uses = new Dictionary<string, Dictionary<IntPtr, int>>();
+        foreach (var obj in indexOf.Keys)
+        {
+            if (Native.FPDFPageObj_GetType(obj) != Native.PAGEOBJ_TEXT) continue;
+            var font = Native.FPDFTextObj_GetFont(obj);
+            if (font == IntPtr.Zero) continue;
+            string name = FontName(obj);
+            textObjects.Add((obj, font, name));
+            if (!uses.TryGetValue(name, out var fonts)) uses[name] = fonts = [];
+            fonts[font] = fonts.GetValueOrDefault(font) + 1;
+        }
+
+        var displaced = new HashSet<IntPtr>();
+        foreach (var fonts in uses.Values)
+        {
+            if (fonts.Count < 2 || !fonts.Keys.Any(f => Native.FPDFFont_GetIsEmbedded(f) == 1)) continue; // standard fonts are one font everywhere
+            var main = fonts.OrderByDescending(f => f.Value).First().Key;
+            foreach (var other in fonts.Keys.Where(f => f != main)) displaced.Add(other);
+        }
+        if (displaced.Count == 0) return;
+
+        foreach (var (obj, font, _) in textObjects)
+        {
+            if (!displaced.Contains(font)) continue;
+            IntPtr shapes = IntPtr.Zero;
+            Native.FS_MATRIX m;
+            if (chars.TryGetValue(obj, out var glyphs) && glyphs.Any(g => !char.IsWhiteSpace(g.Ch) && g.Ch != '\0') && glyphs.All(g => g.Ch != '\0')
+                && Native.FPDFPageObj_GetMatrix(obj, &m) != 0)
+                shapes = TextAsOutlines(obj, glyphs, new Affine(m.a, m.b, m.c, m.d, m.e, m.f));
+            if (shapes == IntPtr.Zero) shapes = TextAsPicture(page, obj); // zero when it draws nothing at all
+            replacements.Add((indexOf[obj], obj, shapes));
+            chars.Remove(obj);
+        }
+    }
+
+    /// <summary>A text object as a small picture of itself, or zero when it shows nothing.</summary>
+    private IntPtr TextAsPicture(PageHandle page, IntPtr textObj)
+    {
+        const float scale = 4; // 288 pixels per inch
+        float l = 0, b = 0, r = 0, t = 0;
+        if (Native.FPDFPageObj_GetBounds(textObj, &l, &b, &r, &t) == 0 || r - l <= 0 || t - b <= 0) return IntPtr.Zero;
+        var bitmap = Native.FPDFTextObj_GetRenderedBitmap(Doc, page.Handle, textObj, scale);
+        if (bitmap == IntPtr.Zero) return IntPtr.Zero;
+        try
+        {
+            int w = Native.FPDFBitmap_GetWidth(bitmap), h = Native.FPDFBitmap_GetHeight(bitmap), stride = Native.FPDFBitmap_GetStride(bitmap);
+            byte* pixels = (byte*)Native.FPDFBitmap_GetBuffer(bitmap);
+            if (w <= 0 || h <= 0 || pixels == null || Native.FPDFBitmap_GetFormat(bitmap) != Native.FPDFBitmap_BGRA) return IntPtr.Zero;
+            var bgra = new byte[w * h * 4];
+            bool visible = false;
+            for (int y = 0; y < h; y++)
+            {
+                new ReadOnlySpan<byte>(pixels + (long)y * stride, w * 4).CopyTo(bgra.AsSpan(y * w * 4));
+                for (int x = 3; x < w * 4 && !visible; x += 4) visible = bgra[y * w * 4 + x] != 0;
+            }
+            if (!visible) return IntPtr.Zero;
+            var image = Native.FPDFPageObj_NewImageObj(Doc);
+            if (image == IntPtr.Zero) return IntPtr.Zero;
+            try { SetPixels(page, image, bgra, w, h); }
+            catch (PdfException)
+            {
+                Native.FPDFPageObj_Destroy(image);
+                return IntPtr.Zero;
+            }
+            var m = new Native.FS_MATRIX { a = r - l, d = t - b, e = l, f = b };
+            Native.FPDFPageObj_SetMatrix(image, &m);
+            return image;
+        }
+        finally { Native.FPDFBitmap_Destroy(bitmap); }
     }
 
     /// <summary>

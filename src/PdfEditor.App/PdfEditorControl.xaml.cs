@@ -49,6 +49,10 @@ public partial class PdfEditorControl : UserControl
     private int _highlightStartChar, _highlightEndChar;
     private IReadOnlyList<PdfRect> _highlightRects = [];
 
+    private double[]? _breakPositions;   // while choosing where to break the page: the heights the line snaps to
+    private double _breakY = double.NaN; // where the break line is now (page points), when the mouse is over the page
+    private bool _breakSnapped;
+
     private TextBox? _editor;            // the in-place text box, when typing on the page
     private Action<string>? _editorCommit;
 
@@ -229,6 +233,11 @@ public partial class PdfEditorControl : UserControl
         _images = Doc.GetImages(_page);
         _drawings = Doc.GetDrawings(_page);
         _annotations = Doc.GetAnnotations(_page);
+        if (_breakPositions is not null)
+        {
+            _breakPositions = [.. Doc.GetBreakPositions(_page)];
+            _breakY = double.NaN;
+        }
 
         // Keep the selection if the same item is still there (for example after moving it).
         if (_selection is { } s)
@@ -272,6 +281,17 @@ public partial class PdfEditorControl : UserControl
                 Canvas.SetTop(handle, bounds.Bottom * ViewScale - HandleSize / 2);
                 Overlay.Children.Add(handle);
             }
+        }
+        if (_breakPositions is not null && !double.IsNaN(_breakY))
+        {
+            // Solid where it sits in a gap between rows of content, dashed where it would cut through something.
+            var line = new System.Windows.Shapes.Line
+            {
+                X1 = 0, X2 = Overlay.Width, Y1 = _breakY * ViewScale, Y2 = _breakY * ViewScale,
+                Stroke = Brushes.DodgerBlue, StrokeThickness = 2, IsHitTestVisible = false,
+            };
+            if (!_breakSnapped) line.StrokeDashArray = [4, 3];
+            Overlay.Children.Add(line);
         }
         DeleteNoteButton.IsEnabled = EditNoteButton.IsEnabled = _selection is { Kind: ItemKind.Annotation };
     }
@@ -342,7 +362,13 @@ public partial class PdfEditorControl : UserControl
     private void AddPage_Click(object sender, RoutedEventArgs e)
     {
         CommitEditor();
-        var size = Doc.GetPageSize(_page);
+        EndPageBreak();
+        var current = Doc.GetPageSize(_page);
+        // Ask for the size, unless one was kept for every new page (Shift asks again).
+        var choice = (Keyboard.Modifiers & ModifierKeys.Shift) == 0 ? PageSizeDialog.Remembered : null;
+        choice ??= PageSizeDialog.Show(this, current.Width, current.Height);
+        if (choice is null) return;
+        var size = choice.Resolve(current.Width, current.Height);
         int at = _page + 1;
         _selection = null;
         _page = at; // set first: the refresh triggered by the edit shows the new page
@@ -471,8 +497,10 @@ public partial class PdfEditorControl : UserControl
         if (sender is not RadioButton { Tag: string name } || HintText is null) return; // still loading
         CommitEditor();
         _tool = Enum.Parse<Tool>(name);
+        _breakPositions = null;
         Overlay.Cursor = _tool switch { Tool.Text => Cursors.IBeam, Tool.Highlight => Cursors.Cross, Tool.Comment => Cursors.Pen, _ => Cursors.Arrow };
         UpdateHint();
+        DrawOverlay();
     }
 
     private void UpdateHint() => HintText.Text = _tool switch
@@ -539,6 +567,13 @@ public partial class PdfEditorControl : UserControl
             return;
         }
         var p = PagePoint(e);
+        if (_breakPositions is not null)
+        {
+            MoveBreakLine(p.Y);
+            BreakPageAt(_breakY);
+            e.Handled = true;
+            return;
+        }
         switch (_tool)
         {
             case Tool.Select:
@@ -626,6 +661,11 @@ public partial class PdfEditorControl : UserControl
 
     private void Overlay_MouseMove(object sender, MouseEventArgs e)
     {
+        if (_breakPositions is not null)
+        {
+            MoveBreakLine(PagePoint(e).Y);
+            return;
+        }
         if (_drag == Drag.None || _selection is null && _drag != Drag.Highlight) return;
         var p = PagePoint(e);
         switch (_drag)
@@ -971,6 +1011,7 @@ public partial class PdfEditorControl : UserControl
         else if (ctrl && e.Key == Key.Z && !shift) Undo_Click(this, e);
         else if (ctrl && (e.Key == Key.Y || e.Key == Key.Z && shift)) Redo_Click(this, e);
         else if (e.Key == Key.Delete && _selection is not null) DeleteSelection();
+        else if (e.Key == Key.Escape && _breakPositions is not null) { EndPageBreak(); UpdateHint(); }
         else if (e.Key == Key.Escape) Select(null);
         else if (e.Key == Key.PageDown) GoToPage(_page + 1);
         else if (e.Key == Key.PageUp) GoToPage(_page - 1);
@@ -1251,9 +1292,15 @@ public partial class PdfEditorControl : UserControl
     private void PageBreak_Click(object sender, RoutedEventArgs e)
     {
         CommitEditor();
+        if (_breakPositions is not null) // choosing it a second time puts the line away
+        {
+            EndPageBreak();
+            UpdateHint();
+            return;
+        }
         if (_selection is not { } s || s.Kind == ItemKind.Annotation)
         {
-            ShowStatus("Select the text, picture or drawing that should start the new page, then choose Page break.");
+            BeginPageBreak();
             return;
         }
         // For text, break above its whole paragraph, not through the middle of it.
@@ -1286,6 +1333,95 @@ public partial class PdfEditorControl : UserControl
         RefreshAll();
         PageScroll.ScrollToTop();
         ShowStatus($"Page break added: {moved} item{(moved == 1 ? "" : "s")} moved to the new page {page + 2}. Undo puts them back.");
+    }
+
+    /// <summary>A page much longer than a sheet of paper (a web page saved as one page) is cut; others get a page of their own size.</summary>
+    private bool IsLongPage(int page)
+    {
+        var size = Doc.GetPageSize(page);
+        return size.Height > 1.7 * size.Width;
+    }
+
+    /// <summary>Shows a line that follows the mouse over the page; a click breaks the page there.</summary>
+    private void BeginPageBreak()
+    {
+        _selection = null;
+        _breakPositions = [.. Doc.GetBreakPositions(_page)];
+        _breakY = double.NaN;
+        Overlay.Cursor = Cursors.SizeNS;
+        DrawOverlay();
+        ShowStatus(IsLongPage(_page)
+            ? "Move the line to where this long page should be cut and click. It settles in the gaps between rows. Esc cancels."
+            : "Move the line to where the page should break and click: what is below goes to a new page. It settles in the gaps between rows. Esc cancels.");
+    }
+
+    private void Overlay_MouseLeave(object sender, MouseEventArgs e)
+    {
+        if (_breakPositions is null || double.IsNaN(_breakY)) return;
+        _breakY = double.NaN; // no line while the mouse is elsewhere
+        DrawOverlay();
+    }
+
+    private void EndPageBreak()
+    {
+        if (_breakPositions is null) return;
+        _breakPositions = null;
+        _breakY = double.NaN;
+        Overlay.Cursor = _tool switch { Tool.Text => Cursors.IBeam, Tool.Highlight => Cursors.Cross, Tool.Comment => Cursors.Pen, _ => Cursors.Arrow };
+        DrawOverlay();
+    }
+
+    /// <summary>Puts the break line at a height (page points), settling into the nearest gap when one is close.</summary>
+    private void MoveBreakLine(double y)
+    {
+        if (_breakPositions is null) return;
+        double reach = 12 / ViewScale; // twelve pixels on screen
+        double nearest = double.NaN;
+        foreach (double position in _breakPositions)
+            if (double.IsNaN(nearest) || Math.Abs(position - y) < Math.Abs(nearest - y)) nearest = position;
+        _breakSnapped = !double.IsNaN(nearest) && Math.Abs(nearest - y) <= reach;
+        double placed = Math.Clamp(_breakSnapped ? nearest : y, 0, Doc.GetPageSize(_page).Height);
+        if (placed == _breakY) return;
+        _breakY = placed;
+        DrawOverlay();
+    }
+
+    private void BreakPageAt(double y)
+    {
+        if (double.IsNaN(y)) return;
+        int page = _page;
+        bool cut = IsLongPage(page);
+        int moved = 0;
+        try
+        {
+            _session.Apply(d =>
+            {
+                moved = cut ? d.SplitPage(page, y) : d.InsertPageBreak(page, y);
+                if (moved == 0) throw new InvalidOperationException("nothing to move");
+            });
+        }
+        catch (InvalidOperationException)
+        {
+            RefreshAll();
+            ShowStatus("There is nothing below the line to put on a new page. Move the line higher, or press Esc.");
+            return;
+        }
+        catch (Exception ex)
+        {
+            EndPageBreak();
+            ShowError("The page break could not be made.", ex);
+            RefreshAll();
+            return;
+        }
+        _selection = null;
+        _page = page + 1;
+        // A long page is usually cut several times: keep the line for the rest of it.
+        bool again = cut && IsLongPage(_page);
+        if (!again) EndPageBreak();
+        RefreshAll();
+        PageScroll.ScrollToTop();
+        string what = cut ? $"Page cut in two: the rest is now page {page + 2}." : $"Page break added: {moved} item{(moved == 1 ? "" : "s")} moved to the new page {page + 2}.";
+        ShowStatus(what + (again ? " Click again to cut the rest, or press Esc to finish." : " Undo puts it back."));
     }
 
     private void OnDrop(object sender, DragEventArgs e)

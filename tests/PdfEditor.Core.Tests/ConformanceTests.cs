@@ -146,6 +146,7 @@ public class ConformanceTests(ITestOutputHelper output)
                 d.SetParagraphAlignment(0, Paragraph(d, "Its shell"), TextAlignment.Center);
             })),
             ("find and replace", () => Edited("word-style.pdf", d => d.ReplaceText("snail", "slug"))),
+            ("page cut in two", () => Edited("word-style.pdf", d => d.SplitPage(0, d.GetBreakPositions(0)[2]))),
             ("page break", () => Edited("word-style.pdf", d =>
             {
                 d.HighlightText(0, "left-coiling");
