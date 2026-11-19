@@ -111,11 +111,12 @@ public sealed unsafe partial class PdfDocument
         var found = new Dictionary<uint, List<(char Ch, double X)>>();
         try
         {
+            uint* pair = stackalloc uint[2];
             for (uint code = 1; code < 256; code++)
             {
                 var probe = Native.FPDFPageObj_CreateTextObj(Doc, font, size);
                 if (probe == IntPtr.Zero) continue;
-                var pair = stackalloc uint[] { code, code };
+                pair[0] = pair[1] = code;
                 // Each probe gets its own spot: PDFium drops text drawn twice in one place.
                 var m = new Native.FS_MATRIX { a = 1, d = 1, e = 5 + code % 16 * 35, f = 5 + code / 16 * 30 };
                 if (Native.FPDFText_SetCharcodes(probe, pair, 2) == 0) { Native.FPDFPageObj_Destroy(probe); continue; }

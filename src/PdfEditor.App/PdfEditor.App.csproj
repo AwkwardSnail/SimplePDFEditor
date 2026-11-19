@@ -8,6 +8,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>PdfEditor.App</RootNamespace>
     <AssemblyName>PdfEditor</AssemblyName>
+    <!-- The aWkward sn@ail icon, made by packaging\generate-icons.ps1. -->
+    <ApplicationIcon>app.ico</ApplicationIcon>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <!-- Lets the project compile on non-Windows build machines; it still only runs on Windows. -->
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
   </PropertyGroup>
