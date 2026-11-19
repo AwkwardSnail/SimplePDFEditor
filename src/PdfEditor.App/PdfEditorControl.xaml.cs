@@ -449,12 +449,50 @@ public partial class PdfEditorControl : UserControl
         Edit(d => d.DeletePage(page));
     }
 
-    private void Rotate_Click(object sender, RoutedEventArgs e)
+    private void Rotate_Click(object sender, RoutedEventArgs e) => RotatePage(90);
+
+    private void RotatePage(int degrees)
     {
         CommitEditor();
         int page = _page;
         _selection = null;
-        Edit(d => d.SetPageRotation(page, d.GetPageRotation(page) + 90));
+        Edit(d => d.SetPageRotation(page, d.GetPageRotation(page) + degrees));
+    }
+
+    /// <summary>Asks for a new size for the current page and gives it that size, with or without scaling what is on it.</summary>
+    private void ResizePage()
+    {
+        CommitEditor();
+        EndPageBreak();
+        var current = Doc.GetPageSize(_page);
+        if (PageSizeDialog.ShowResize(this, current.Width, current.Height) is not { } chosen) return;
+        int page = _page;
+        _selection = null;
+        Edit(d => d.ResizePage(page, chosen.Width, chosen.Height, chosen.ScaleContent));
+    }
+
+    /// <summary>A right-click on a page in the list makes it the current page and offers what can be done to it.</summary>
+    private void Thumbs_RightClick(object sender, MouseButtonEventArgs e)
+    {
+        int index = ThumbIndexAt(e.OriginalSource);
+        if (index < 0) return;
+        e.Handled = true;
+        CommitEditor();
+        if (index != _page) GoToPage(index);
+
+        var menu = new ContextMenu { PlacementTarget = Thumbs };
+        void Add(string header, Action action, bool enabled = true)
+        {
+            var item = new MenuItem { Header = header, IsEnabled = enabled };
+            item.Click += (_, _) => action();
+            menu.Items.Add(item);
+        }
+        Add("Rotate right", () => RotatePage(90));
+        Add("Rotate left", () => RotatePage(-90));
+        Add("Resize page...", ResizePage);
+        menu.Items.Add(new Separator());
+        Add("Delete page", () => DeletePage_Click(this, new RoutedEventArgs()), Doc.PageCount > 1);
+        menu.IsOpen = true;
     }
 
     private void MovePageUp_Click(object sender, RoutedEventArgs e) => MovePage(-1);

@@ -221,6 +221,14 @@ public class ConformanceTests(ITestOutputHelper output)
                 using var doc = PdfDocument.Open(Fixture("word-style.pdf"));
                 return doc.CreateTiles(0, new TileOptions { PaperWidth = 419.5, PaperHeight = 595.3 });
             }),
+            ("page resized with its content, then edited", () =>
+            {
+                var doc = PdfDocument.Open(Fixture("word-style.pdf"));
+                doc.ResizePage(0, 1190.55, 1683.78, scaleContent: true);
+                doc.AddText(0, 72, 72, "Added after resizing", new TextStyle());
+                doc.ResizePage(0, 420, 595, scaleContent: false);
+                return doc;
+            }),
             ("page spread over sheets placed by hand", () =>
             {
                 using var doc = PdfDocument.Open(Fixture("word-style.pdf"));

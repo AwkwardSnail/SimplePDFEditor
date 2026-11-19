@@ -111,9 +111,9 @@
                           Background="{DynamicResource LineBrush}" ToolTip="Drag to resize the page list" />
 
             <ListBox x:Name="Thumbs" Grid.Column="0" SelectionChanged="Thumbs_SelectionChanged" AllowDrop="True"
-                     PreviewMouseLeftButtonDown="Thumbs_PreviewMouseLeftButtonDown" PreviewMouseMove="Thumbs_PreviewMouseMove"
+                     PreviewMouseLeftButtonDown="Thumbs_PreviewMouseLeftButtonDown" PreviewMouseRightButtonUp="Thumbs_RightClick" PreviewMouseMove="Thumbs_PreviewMouseMove"
                      DragOver="Thumbs_DragOver" DragLeave="Thumbs_DragLeave" Drop="Thumbs_Drop" SizeChanged="Thumbs_SizeChanged"
-                     ToolTip="Drag a page to change its place"
+                     ToolTip="Drag a page to change its place. Right-click for more"
                      ScrollViewer.HorizontalScrollBarVisibility="Disabled" HorizontalContentAlignment="Center">
                 <ListBox.ItemTemplate>
                     <DataTemplate>

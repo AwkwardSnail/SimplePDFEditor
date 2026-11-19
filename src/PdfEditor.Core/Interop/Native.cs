@@ -96,6 +96,8 @@ internal static unsafe class Native
     [DllImport(Lib)] public static extern void FPDFPage_SetMediaBox(IntPtr page, float left, float bottom, float right, float top);
     [DllImport(Lib)] public static extern void FPDFPage_SetCropBox(IntPtr page, float left, float bottom, float right, float top);
     [DllImport(Lib)] public static extern int FPDFPage_GetCropBox(IntPtr page, float* left, float* bottom, float* right, float* top);
+    [DllImport(Lib)] public static extern int FPDFPage_TransFormWithClip(IntPtr page, FS_MATRIX* matrix, FS_RECTF* clipRect);
+    [DllImport(Lib)] public static extern void FPDFPage_TransformAnnots(IntPtr page, double a, double b, double c, double d, double e, double f);
     [DllImport(Lib)] public static extern void FPDFPageObj_TransformClipPath(IntPtr obj, double a, double b, double c, double d, double e, double f);
     [DllImport(Lib)] public static extern IntPtr FPDFAnnot_GetLink(IntPtr annot);
     [DllImport(Lib)] public static extern IntPtr FPDFLink_GetAction(IntPtr link);

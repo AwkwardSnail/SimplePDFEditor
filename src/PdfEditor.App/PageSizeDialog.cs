@@ -22,7 +22,8 @@ internal static class PageSizeDialog
 
     private static readonly (string Name, double Width, double Height)[] Standard =
     [
-        ("A3", 297, 420), ("A4", 210, 297), ("A5", 148, 210), ("Letter", 215.9, 279.4), ("Legal", 215.9, 355.6),
+        ("A0", 841, 1189), ("A1", 594, 841), ("A2", 420, 594), ("A3", 297, 420), ("A4", 210, 297), ("A5", 148, 210),
+        ("Letter", 215.9, 279.4), ("Legal", 215.9, 355.6),
     ];
 
     private static string SettingsFile =>
@@ -63,21 +64,33 @@ internal static class PageSizeDialog
     /// Shows the dialog. Returns the chosen size, or null when cancelled. The choice of whether to
     /// keep the size for later pages is stored (on this computer only) before returning.
     /// </summary>
-    public static NewPageSize? Show(DependencyObject owner, double currentWidth, double currentHeight)
+    public static NewPageSize? Show(DependencyObject owner, double currentWidth, double currentHeight) =>
+        Ask(owner, currentWidth, currentHeight, false, out _);
+
+    /// <summary>
+    /// Asks for a new size for the current page, and whether what is on it should be scaled to
+    /// fit. Returns null when cancelled. Nothing is kept for later.
+    /// </summary>
+    public static (double Width, double Height, bool ScaleContent)? ShowResize(DependencyObject owner, double currentWidth, double currentHeight) =>
+        Ask(owner, currentWidth, currentHeight, true, out bool scale) is { Width: { } w, Height: { } h } ? (w, h, scale) : null;
+
+    private static NewPageSize? Ask(DependencyObject owner, double currentWidth, double currentHeight, bool resize, out bool scaleContent)
     {
         var window = new Window
         {
-            Title = "Add page",
+            Title = resize ? "Resize page" : "Add page",
             Owner = Window.GetWindow(owner),
             SizeToContent = SizeToContent.WidthAndHeight,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
             ResizeMode = ResizeMode.NoResize,
             ShowInTaskbar = false,
         };
-        var remembered = Remembered;
+        // A page being resized starts from the size it has.
+        var remembered = resize ? new NewPageSize(currentWidth, currentHeight) : Remembered;
+        int first = resize ? 0 : 1; // where the standard sizes start in the list
 
         var sizes = new ComboBox { Width = 190 };
-        sizes.Items.Add("Same as this page");
+        if (!resize) sizes.Items.Add("Same as this page");
         foreach (var (name, w, h) in Standard) sizes.Items.Add($"{name}  ({Format(w)} × {Format(h)} mm)");
         sizes.Items.Add("Other size");
         int custom = sizes.Items.Count - 1;
@@ -88,13 +101,14 @@ internal static class PageSizeDialog
         var height = new TextBox { Width = 70 };
         var keep = new CheckBox
         {
-            Content = "Use this size for every new page from now on",
-            IsChecked = remembered is not null,
+            Content = resize ? "Make what is on the page larger or smaller to fit" : "Use this size for every new page from now on",
+            IsChecked = resize || remembered is not null,
             Margin = new Thickness(0, 12, 0, 0),
         };
         var keepNote = new TextBlock
         {
-            Text = "Add page will then stop asking. Hold Shift while choosing Add page to see this again.",
+            Text = resize ? "Without this, everything stays the size it is and keeps its place from the top-left corner."
+                : "Add page will then stop asking. Hold Shift while choosing Add page to see this again.",
             TextWrapping = TextWrapping.Wrap, MaxWidth = 300, Margin = new Thickness(20, 2, 0, 0), Opacity = 0.65,
         };
 
@@ -102,14 +116,14 @@ internal static class PageSizeDialog
         void Show()
         {
             int i = sizes.SelectedIndex;
-            bool isStandard = i >= 1 && i < custom;
+            bool isStandard = i >= first && i < custom;
             portrait.IsEnabled = landscape.IsEnabled = isStandard;
             width.IsEnabled = height.IsEnabled = i == custom;
             if (i == custom) return; // keep what is typed
             double w = currentWidth / PointsPerMillimetre, h = currentHeight / PointsPerMillimetre;
             if (isStandard)
             {
-                (_, w, h) = Standard[i - 1];
+                (_, w, h) = Standard[i - first];
                 if (landscape.IsChecked == true) (w, h) = (h, w);
             }
             width.Text = Format(w);
@@ -128,7 +142,7 @@ internal static class PageSizeDialog
             if (match >= 0)
             {
                 if (!Near(Standard[match].Width, mw)) landscape.IsChecked = true;
-                sizes.SelectedIndex = match + 1;
+                sizes.SelectedIndex = match + first;
             }
             else
             {
@@ -171,24 +185,24 @@ internal static class PageSizeDialog
         Place(keep, 4, 0, 3);
         Place(keepNote, 5, 0, 3);
 
-        var ok = new Button { Content = "Add page", Width = 80, Margin = new Thickness(0, 0, 8, 0), IsDefault = true };
+        var ok = new Button { Content = resize ? "Resize" : "Add page", Width = 80, Margin = new Thickness(0, 0, 8, 0), IsDefault = true };
         var cancel = new Button { Content = "Cancel", Width = 80, IsCancel = true };
         NewPageSize? result = null;
         ok.Click += (_, _) =>
         {
             NewPageSize chosen;
-            if (sizes.SelectedIndex == 0) chosen = NewPageSize.SameAsCurrent;
+            if (!resize && sizes.SelectedIndex == 0) chosen = NewPageSize.SameAsCurrent;
             else
             {
                 // Between 10 mm and 5 m a side, which is as far as PDF readers reliably go.
                 if (!TryParse(width.Text, out double w) || !TryParse(height.Text, out double h) || w < 10 || h < 10 || w > 5000 || h > 5000)
                 {
-                    MessageBox.Show(window, "Enter a width and a height in millimetres, between 10 and 5000.", "Add page", MessageBoxButton.OK, MessageBoxImage.Information);
+                    MessageBox.Show(window, "Enter a width and a height in millimetres, between 10 and 5000.", window.Title, MessageBoxButton.OK, MessageBoxImage.Information);
                     return;
                 }
                 chosen = new NewPageSize(w * PointsPerMillimetre, h * PointsPerMillimetre);
             }
-            Remembered = keep.IsChecked == true ? chosen : null;
+            if (!resize) Remembered = keep.IsChecked == true ? chosen : null;
             result = chosen;
             window.DialogResult = true;
         };
@@ -199,7 +213,9 @@ internal static class PageSizeDialog
 
         window.Content = grid;
         window.Loaded += (_, _) => sizes.Focus();
-        return window.ShowDialog() == true ? result : null;
+        bool? done = window.ShowDialog();
+        scaleContent = resize && keep.IsChecked == true;
+        return done == true ? result : null;
     }
 
     private static bool Near(double a, double b) => Math.Abs(a - b) < 0.6;

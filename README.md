@@ -105,7 +105,9 @@ Scrolling past the end of a page carries on to the next page. The page list on t
 
 **Gradients.** PDFium can show a shaded fill (a gradient) but leaves it out when it rewrites a page, so before a page is rewritten each gradient on it is replaced by a picture of itself (144 pixels per inch) in the same place. Gradients inside a group are untouched unless the group is taken apart. Some programs write a see-through effect as a "gradient" that is one flat colour all over, which shows as a solid box (black boxes over links in web pages saved from Safari, for example). Right-click such a box to delete it, or all the boxes like it on the page.
 
-**Add page** asks for the new page's size: the same as the current page, A3, A4, A5, Letter, Legal or any size in millimetres, portrait or landscape. The size can be kept for every new page; hold Shift while choosing Add page to be asked again. The kept size is stored in a small file on this computer only.
+**Page list**: right-click a page in the list on the left to rotate it right or left, resize it or delete it. **Resize page** asks for the new size and whether what is on the page is made larger or smaller to fit (it keeps its shape and sits in the middle); without that, everything stays the size it is and keeps its place from the top-left corner. Scaling is written in front of the page's content, so nothing on the page is rewritten.
+
+**Add page** asks for the new page's size: the same as the current page, A0 to A5, Letter, Legal or any size in millimetres, portrait or landscape. The size can be kept for every new page; hold Shift while choosing Add page to be asked again. The kept size is stored in a small file on this computer only.
 
 **Find & replace** (Ctrl+H) replaces text throughout the document and re-flows each paragraph it changes.
 

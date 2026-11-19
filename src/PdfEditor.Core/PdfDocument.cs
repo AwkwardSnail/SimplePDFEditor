@@ -153,6 +153,38 @@ public sealed unsafe partial class PdfDocument : IDisposable
         Native.FPDFPage_SetRotation(page.Handle, ((degrees / 90) % 4 + 4) % 4);
     }
 
+    /// <summary>
+    /// Gives a page a new size (as seen, in points). With <paramref name="scaleContent"/> what is
+    /// on the page, comments and links included, is made larger or smaller to fit the new page,
+    /// keeping its shape, and sits in the middle of it. Without, everything stays the size it is
+    /// and keeps its distance from the top-left corner, so a smaller page hides what no longer fits.
+    /// </summary>
+    public void ResizePage(int pageIndex, double width, double height, bool scaleContent)
+    {
+        if (width < 10 || height < 10) throw new ArgumentOutOfRangeException(nameof(width), "A page must be at least 10 points each way.");
+        using var page = OpenPage(pageIndex);
+        if (Math.Abs(page.Width - width) < 0.01 && Math.Abs(page.Height - height) < 0.01) return;
+
+        if (scaleContent)
+        {
+            double s = Math.Min(width / page.Width, height / page.Height);
+            var seen = new Affine(s, 0, 0, s, (width - s * page.Width) / 2, (height - s * page.Height) / 2);
+            var m = Affine.Concat(Affine.Concat(page.UserToView, seen), page.ViewToUser);
+            // Written in front of the page's content as it stands, so nothing on the page is rewritten.
+            var matrix = new Native.FS_MATRIX { a = (float)m.A, b = (float)m.B, c = (float)m.C, d = (float)m.D, e = (float)m.E, f = (float)m.F };
+            if (Native.FPDFPage_TransFormWithClip(page.Handle, &matrix, null) == 0) throw new PdfException("The page could not be resized.");
+            Native.FPDFPage_TransformAnnots(page.Handle, m.A, m.B, m.C, m.D, m.E, m.F);
+        }
+
+        // The new page keeps the old one's top-left corner as seen.
+        var box = page.ViewToUser.MapBounds(0, 0, width, height);
+        float l = 0, b = 0, r = 0, t = 0;
+        bool hadCrop = Native.FPDFPage_GetCropBox(page.Handle, &l, &b, &r, &t) != 0;
+        Native.FPDFPage_SetMediaBox(page.Handle, (float)box.X, (float)box.Y, (float)box.Right, (float)box.Bottom);
+        if (hadCrop) Native.FPDFPage_SetCropBox(page.Handle, (float)box.X, (float)box.Y, (float)box.Right, (float)box.Bottom);
+        _charsByFont = null;
+    }
+
     public int GetPageRotation(int pageIndex)
     {
         using var page = OpenPage(pageIndex);

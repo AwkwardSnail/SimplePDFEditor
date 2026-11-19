@@ -765,6 +765,59 @@ public class PdfDocumentTests
         Assert.Equal(1, doc.PageCount);
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(90)]
+    [InlineData(180)]
+    [InlineData(270)]
+    public void A_page_can_be_resized_with_or_without_what_is_on_it(int rotation)
+    {
+        using var doc = PdfDocument.Open(Path.Combine(AppContext.BaseDirectory, "Fixtures", "word-style.pdf"));
+        doc.SetPageRotation(0, rotation);
+        var before = doc.GetPageSize(0);
+        var firstRun = doc.GetTextRuns(0)[0];
+        var original = doc.Render(0, 1, false);
+
+        // Twice the width and height, nothing scaled: everything keeps its place from the top-left corner.
+        doc.ResizePage(0, before.Width * 2, before.Height * 2, scaleContent: false);
+        Assert.Equal(before.Width * 2, doc.GetPageSize(0).Width, 0.1);
+        Assert.Equal(before.Height * 2, doc.GetPageSize(0).Height, 0.1);
+        var same = doc.GetTextRuns(0)[0];
+        Assert.Equal(firstRun.Text, same.Text);
+        Assert.Equal(firstRun.Bounds.X, same.Bounds.X, 0.1);
+        Assert.Equal(firstRun.Bounds.Y, same.Bounds.Y, 0.1);
+        doc.ResizePage(0, before.Width, before.Height, scaleContent: false);
+
+        // Three times the size with the content scaled: drawn at a third, it is the page as it was.
+        doc.ResizePage(0, before.Width * 3, before.Height * 3, scaleContent: true);
+        Assert.Equal(before.Width * 3, doc.GetPageSize(0).Width, 0.1);
+        var grown = doc.GetTextRuns(0)[0];
+        Assert.Equal(firstRun.Bounds.X * 3, grown.Bounds.X, 0.5);
+        Assert.Equal(firstRun.Bounds.Width * 3, grown.Bounds.Width, 0.5);
+        using var saved = PdfDocument.Open(doc.ToBytes());
+        var small = saved.Render(0, 1.0 / 3, false);
+        Assert.Equal((original.Width, original.Height), (small.Width, small.Height));
+        int Differ(int dx, int dy)
+        {
+            int changed = 0;
+            for (int y = 8; y < original.Height - 8; y += 3)
+                for (int x = 8; x < original.Width - 8; x += 3)
+                {
+                    int a = (y * original.Width + x) * 4, b = ((y + dy) * small.Width + x + dx) * 4;
+                    if (Math.Abs(original.Pixels[a] - small.Pixels[b]) + Math.Abs(original.Pixels[a + 1] - small.Pixels[b + 1]) + Math.Abs(original.Pixels[a + 2] - small.Pixels[b + 2]) > 120) changed++;
+                }
+            return changed;
+        }
+        int inPlace = Differ(0, 0);
+        foreach (var (dx, dy) in new[] { (2, 0), (-2, 0), (0, 2), (0, -2) })
+            Assert.True(inPlace * 2 < Differ(dx, dy), $"{inPlace} pixels differ in place, {Differ(dx, dy)} when shifted by {dx}, {dy}");
+
+        // A different shape: the content keeps its own shape and sits in the middle.
+        saved.ResizePage(0, before.Width * 3 + 300, before.Height * 3, scaleContent: true);
+        Assert.Equal(grown.Bounds.X + 150, saved.GetTextRuns(0)[0].Bounds.X, 0.5);
+        Assert.Equal(grown.Bounds.Y, saved.GetTextRuns(0)[0].Bounds.Y, 0.5);
+    }
+
     /// <summary>A green box, a red-to-blue gradient, and a "gradient" that is black all over (as some programs write a transparent one).</summary>
     internal static byte[] PdfWithGradients()
     {
