@@ -7,7 +7,7 @@
 # -Install copies the package layout to %USERPROFILE%\apps\PdfEditor-dev and
 # registers it from there, so it shows in the Start menu and is offered for .pdf
 # and .rtf files, and rebuilding the project doesn't disturb it. Remove it from
-# Settings > Apps, or with: Get-AppxPackage AkwardSnail.PdfEditorDev | Remove-AppxPackage
+# Settings > Apps, or with: Get-AppxPackage AkwardSnail.SimplePDFedit | Remove-AppxPackage
 #
 # Output goes to packaging\out\. Needs the .NET SDK and the Windows 10/11 SDK
 # (makeappx, makepri).

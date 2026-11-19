@@ -2,11 +2,10 @@
 <!--
   MSIX manifest for the PDF editor.
 
-  NOT YET A STORE IDENTITY. The Identity Name below is a placeholder for testing on this
-  PC (pack.ps1 -Install). Before a Store submission, reserve the product in Partner Center
-  and copy Identity Name from Product management > Product identity exactly, including the
-  "Akward" spelling of the prefix; then set the final display name here too.
-  Identity Publisher and PublisherDisplayName are the Awkward Snail ones used by the other apps.
+  Identity Name, Identity Publisher and PublisherDisplayName are copied exactly from Partner
+  Center (Product management > Product identity), including the "Akward" spelling of the
+  prefix. Store ID 9NNGF37Z5668. The two DisplayNames must be a name reserved for the product
+  in Partner Center before a Store submission.
   pack.ps1 sets Identity Version from its -Version parameter.
 -->
 <Package
@@ -16,7 +15,7 @@
   IgnorableNamespaces="uap rescap">
 
   <Identity
-    Name="AkwardSnail.PdfEditorDev"
+    Name="AkwardSnail.SimplePDFedit"
     Publisher="CN=A55585C2-FE40-4ED1-9B77-46466AE9C532"
     Version="0.1.0.0"
     ProcessorArchitecture="x64" />
