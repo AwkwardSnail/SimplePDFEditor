@@ -16,6 +16,12 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Atkinson Hyperlegible Next, SIL OFL 1.1 (Fonts\OFL.txt). Built into the app so it looks the same everywhere. -->
+    <Resource Include="Fonts\*.ttf" />
+    <None Include="Fonts\*.txt" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\PdfEditor.Core\PdfEditor.Core.csproj" />
   </ItemGroup>
 

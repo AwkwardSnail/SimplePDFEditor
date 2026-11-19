@@ -54,7 +54,7 @@ internal static class TextPrompt
         var panel = new StackPanel { Margin = new Thickness(12) };
         panel.Children.Add(input);
         if (multiline && !password)
-            panel.Children.Add(new TextBlock { Text = "Ctrl+Enter to confirm", Foreground = SystemColors.GrayTextBrush, Margin = new Thickness(0, 4, 0, 0) });
+            panel.Children.Add(new TextBlock { Text = "Ctrl+Enter to confirm", Opacity = 0.65, Margin = new Thickness(0, 4, 0, 0) });
         panel.Children.Add(buttons);
         window.Content = panel;
 

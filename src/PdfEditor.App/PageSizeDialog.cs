@@ -95,7 +95,7 @@ internal static class PageSizeDialog
         var keepNote = new TextBlock
         {
             Text = "Add page will then stop asking. Hold Shift while choosing Add page to see this again.",
-            TextWrapping = TextWrapping.Wrap, MaxWidth = 300, Margin = new Thickness(20, 2, 0, 0), Foreground = SystemColors.GrayTextBrush,
+            TextWrapping = TextWrapping.Wrap, MaxWidth = 300, Margin = new Thickness(20, 2, 0, 0), Opacity = 0.65,
         };
 
         // The boxes show the size that will be used; they can be typed in only for "Other size".
@@ -150,7 +150,13 @@ internal static class PageSizeDialog
             grid.Children.Add(element);
         }
         TextBlock Label(string text) => new() { Text = text, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 10, 8) };
-        TextBlock Unit() => new() { Text = "mm", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 8) };
+        StackPanel WithUnit(TextBox box)
+        {
+            var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
+            row.Children.Add(box);
+            row.Children.Add(new TextBlock { Text = "mm", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0) });
+            return row;
+        }
 
         Place(Label("Size"), 0, 0);
         Place(new Border { Child = sizes, Margin = new Thickness(0, 0, 0, 8), HorizontalAlignment = HorizontalAlignment.Left }, 0, 1, 2);
@@ -159,11 +165,9 @@ internal static class PageSizeDialog
         orientation.Children.Add(landscape);
         Place(orientation, 1, 1, 2);
         Place(Label("Width"), 2, 0);
-        Place(new Border { Child = width, Margin = new Thickness(0, 0, 0, 8), HorizontalAlignment = HorizontalAlignment.Left }, 2, 1);
-        Place(Unit(), 2, 2);
+        Place(WithUnit(width), 2, 1, 2);
         Place(Label("Height"), 3, 0);
-        Place(new Border { Child = height, Margin = new Thickness(0, 0, 0, 8), HorizontalAlignment = HorizontalAlignment.Left }, 3, 1);
-        Place(Unit(), 3, 2);
+        Place(WithUnit(height), 3, 1, 2);
         Place(keep, 4, 0, 3);
         Place(keepNote, 5, 0, 3);
 

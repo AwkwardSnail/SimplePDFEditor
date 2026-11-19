@@ -794,6 +794,8 @@ public partial class PdfEditorControl : UserControl
         DiscardEditor();
         var box = new TextBox
         {
+            Style = new Style(typeof(TextBox)), // the plain system look: this box sits on the white page, not on the dark desk
+            CaretBrush = Brushes.Black,
             TextWrapping = wrapWidth > 0 ? TextWrapping.Wrap : TextWrapping.NoWrap,
             Text = initial,
             AcceptsReturn = multiline,
@@ -946,10 +948,10 @@ public partial class PdfEditorControl : UserControl
             ShowStatus($"Replaced {replaced} occurrence{(replaced == 1 ? "" : "s")}; the paragraphs they were in have re-flowed.");
     }
 
-    private static bool IsInToolbar(DependencyObject? element)
+    private bool IsInToolbar(DependencyObject? element)
     {
         for (; element is not null; element = element is Visual ? VisualTreeHelper.GetParent(element) ?? LogicalTreeHelper.GetParent(element) : LogicalTreeHelper.GetParent(element))
-            if (element is ToolBar) return true;
+            if (ReferenceEquals(element, Tools)) return true;
         return false;
     }
 

@@ -126,9 +126,9 @@ internal static class TilesDialog
         panel.Children.Add(Row(scaled, percent, Words("%")));
         panel.Children.Add(Heading("Joining the sheets"));
         var overlapLabel = Words("Overlap between sheets");
-        overlapLabel.Width = 190;
+        overlapLabel.Width = 235;
         var marginLabel = Words("Blank edge the printer cannot reach");
-        marginLabel.Width = 190;
+        marginLabel.Width = 235;
         var mm1 = Words("mm");
         mm1.Margin = new Thickness(6, 0, 0, 0);
         var mm2 = Words("mm");

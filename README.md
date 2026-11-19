@@ -1,6 +1,6 @@
 # PDFeditor
 
-A PDF editor in C# for The Awkward Snail.
+A PDF editor for Windows by [Awkward Snail](https://awkwardsnail.com.au): add and rearrange pages, edit and add text and pictures, highlight and comment. It works offline, collects no data and never goes online.
 
 ## Layout
 
@@ -154,3 +154,13 @@ The reflow and RTF tests read files in `tests/PdfEditor.Core.Tests/Fixtures`, ma
 `ConformanceTests` saves the result of every kind of edit and has [qpdf](https://qpdf.sourceforge.io/) check each file's structure against the PDF specification (ISO 32000-1). Install qpdf with `winget install QPDF.QPDF`; without it those tests pass with a note saying nothing was checked.
 
 PDFium is not thread-safe, even across separate documents: use the library from one thread at a time.
+
+## Licence
+
+MIT (see `LICENSE`). Forks are welcome but may not use the Awkward Snail name.
+
+The app builds on work by others, each under its own licence:
+
+- [PDFium](https://pdfium.googlesource.com/pdfium/) (BSD 3-Clause and Apache 2.0), through the `bblanchon.PDFium` packages.
+- [StbImageSharp](https://github.com/StbSharp/StbImageSharp) (public domain) for reading image files.
+- Atkinson Hyperlegible Next (SIL Open Font Licence 1.1, `src/PdfEditor.App/Fonts/OFL.txt`) for the app's own text.
