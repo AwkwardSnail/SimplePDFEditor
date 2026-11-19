@@ -86,6 +86,15 @@ internal static class TilesDialog
         var rows = new StackPanel();          // the table of sheets: one row each
         var rowBorders = new List<Border>();
 
+        // The page keeps its size in the preview while options change: it is shown with a fixed
+        // amount of room around it, which only ever grows, and only when sheets would not fit.
+        double room = Math.Max(page.Width, page.Height) * 0.2;
+        Rect Shown(double needed)
+        {
+            room = Math.Max(room, needed);
+            return new Rect(-room, -room, page.Width + 2 * room, page.Height + 2 * room);
+        }
+
         // The paper as it stands in the list, upright, in points.
         (double W, double H) Paper()
         {
@@ -157,8 +166,7 @@ internal static class TilesDialog
         Rect ManualBounds(TileOptions o)
         {
             double longest = placed.Count == 0 ? 297 : placed.Max(s => Math.Max(Papers[s.Paper].Width, Papers[s.Paper].Height));
-            double room = longest * PointsPerMillimetre / o.Scale / 2;
-            return new Rect(-room, -room, page.Width + 2 * room, page.Height + 2 * room);
+            return Shown(longest * PointsPerMillimetre / o.Scale / 2);
         }
 
         void KeepInView(TileOptions o)
@@ -215,10 +223,11 @@ internal static class TilesDialog
             }
             var plan = PdfDocument.PlanTiles(page, grid);
             var laid = PdfDocument.TileSheets(page, grid);
-            var all = new Rect(0, 0, page.Width, page.Height);
-            foreach (var s in laid) all.Union(new Rect(s.X, s.Y, s.PaperWidth / grid.Scale, s.PaperHeight / grid.Scale));
-            all.Inflate(all.Width * 0.02, all.Height * 0.02);
-            view.Show(laid, grid, all);
+            // How far the sheets hang over the page's edges, at most.
+            double over = 0;
+            foreach (var s in laid)
+                over = Math.Max(over, Math.Max(Math.Max(-s.X, -s.Y), Math.Max(s.X + s.PaperWidth / grid.Scale - page.Width, s.Y + s.PaperHeight / grid.Scale - page.Height)));
+            view.Show(laid, grid, Shown(over * 1.03));
             ok.IsEnabled = true;
             summary.Text = $"{plan.Sheets} sheet{(plan.Sheets == 1 ? "" : "s")}: {plan.Columns} across, {plan.Rows} down. " +
                            $"The poster will be {Format(plan.PosterWidth / PointsPerMillimetre)} × {Format(plan.PosterHeight / PointsPerMillimetre)} mm, " +
