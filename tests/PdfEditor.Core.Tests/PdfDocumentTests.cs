@@ -1113,6 +1113,35 @@ public class PdfDocumentTests
         Assert.Equal(was.Width, back.Width, 1);
     }
 
+    [Fact]
+    public void A_page_whose_crop_box_comes_from_the_page_tree_can_still_be_resized()
+    {
+        // The crop box sits on the Pages node, not on the page: the page inherits it.
+        var bytes = System.Text.Encoding.ASCII.GetBytes(
+            "%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1/CropBox[0 0 300 400]>>endobj\n" +
+            "3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Contents 4 0 R>>endobj\n" +
+            "4 0 obj<</Length 22>>stream\n0 0 0 rg 50 50 40 40 re f\nendstream endobj\ntrailer<</Root 1 0 R>>\n%%EOF");
+        using var doc = PdfDocument.Open(bytes);
+        Assert.Equal(new PdfSize(300, 400), doc.GetPageSize(0));
+        doc.ResizePage(0, 450, 600, scaleContent: true);
+        using var saved = PdfDocument.Open(doc.ToBytes());
+        Assert.Equal(450, saved.GetPageSize(0).Width, 0.5);
+        Assert.Equal(600, saved.GetPageSize(0).Height, 0.5);
+    }
+
+    [Fact]
+    public void Lines_of_a_contents_page_are_not_joined_into_a_paragraph()
+    {
+        using var doc = PdfDocument.Create();
+        doc.AddPage(400, 400);
+        // Full-width lines at even spacing, as a justified paragraph has, but each leads by dots to a page number.
+        string[] entries = ["Limitations of feedback . . . . . . . . . . . . . . . . 112", "Summary of the chapter . . . . . . . . . . . . . . . . 113", "Review questions here . . . . . . . . . . . . . . . . . 113", "Problem set and notes . . . . . . . . . . . . . . . . . 114"];
+        for (int i = 0; i < entries.Length; i++) doc.AddText(0, 40, 60 + i * 14, entries[i], new TextStyle { Size = 11 });
+        var paragraphs = doc.GetParagraphs(0);
+        Assert.Equal(4, paragraphs.Count);
+        Assert.All(paragraphs, p => Assert.Equal(1, p.LineCount));
+    }
+
     private static int PixelsThatDiffer(RenderedPage a, RenderedPage b, PdfRect area)
     {
         int changed = 0;

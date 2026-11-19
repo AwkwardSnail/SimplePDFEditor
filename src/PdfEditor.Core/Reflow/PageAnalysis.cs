@@ -79,6 +79,12 @@ internal sealed class Line
     public double DominantShare { get; private set; }
     public double Width => Right - Left;
     public double Center => (Left + Right) / 2;
+    /// <summary>
+    /// Laid out in columns rather than as running text: a row of dots leading to a page number
+    /// (a contents page), or a gap far wider than any space between words. Such a line fills its
+    /// width without having wrapped, so it is never joined to its neighbours as a paragraph.
+    /// </summary>
+    public bool Tabular { get; private set; }
 
     public void Finish()
     {
@@ -93,6 +99,18 @@ internal sealed class Line
         var fonts = Glyphs.GroupBy(g => g.Style.DisplayName).OrderByDescending(g => g.Count()).First();
         DominantFont = fonts.Key;
         DominantShare = fonts.Count() / (double)Glyphs.Count;
+
+        int spacedDots = 0, dotsInARow = 0, longestRow = 0;
+        double widestGap = 0;
+        for (int i = 0; i < Glyphs.Count; i++)
+        {
+            var g = Glyphs[i];
+            dotsInARow = g.Ch == '.' ? dotsInARow + 1 : 0;
+            longestRow = Math.Max(longestRow, dotsInARow);
+            if (g.Ch == '.' && g.SpaceBefore) spacedDots++;
+            if (i > 0) widestGap = Math.Max(widestGap, g.X - Glyphs[i - 1].End);
+        }
+        Tabular = spacedDots >= 4 || longestRow >= 5 || widestGap > 2.5 * Em;
     }
 
     /// <summary>Width of the first word, used to tell a wrapped line from a deliberately short one.</summary>
@@ -390,6 +408,7 @@ internal sealed unsafe class PageAnalysis
     private static bool Continues(Paragraph p, ref Mode mode, Line l, double? typicalGap, double columnRight, double? pageRight)
     {
         var q = p.Lines[^1];
+        if (l.Tabular || q.Tabular) return false;
         double em = Line.Mode(p.Lines.Select(x => x.Em), 0.05);
         double gap = l.Baseline - q.Baseline;
         if (gap < 0.7 * em || gap > 2.2 * em) return false;

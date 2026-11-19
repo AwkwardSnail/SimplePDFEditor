@@ -177,11 +177,11 @@ public sealed unsafe partial class PdfDocument : IDisposable
         }
 
         // The new page keeps the old one's top-left corner as seen.
+        // Both boxes are set: a page can take its crop box from the document's page tree rather than
+        // carry one itself, and that inherited box would go on deciding its size.
         var box = page.ViewToUser.MapBounds(0, 0, width, height);
-        float l = 0, b = 0, r = 0, t = 0;
-        bool hadCrop = Native.FPDFPage_GetCropBox(page.Handle, &l, &b, &r, &t) != 0;
         Native.FPDFPage_SetMediaBox(page.Handle, (float)box.X, (float)box.Y, (float)box.Right, (float)box.Bottom);
-        if (hadCrop) Native.FPDFPage_SetCropBox(page.Handle, (float)box.X, (float)box.Y, (float)box.Right, (float)box.Bottom);
+        Native.FPDFPage_SetCropBox(page.Handle, (float)box.X, (float)box.Y, (float)box.Right, (float)box.Bottom);
         _charsByFont = null;
     }
 

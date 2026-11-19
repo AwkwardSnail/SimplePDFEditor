@@ -38,7 +38,9 @@ public sealed unsafe partial class PdfDocument
                 double x, y;
                 Native.FPDFText_GetCharOrigin(textPage, i, &x, &y);
                 if (!chars.TryGetValue(obj, out var list)) chars[obj] = list = [];
-                list.Add(((char)Native.FPDFText_GetUnicode(textPage, i), x, y));
+                char ch = (char)Native.FPDFText_GetUnicode(textPage, i);
+                if (Native.FPDFText_IsHyphen(textPage, i) == 1) ch = '-'; // PDFium reports a line-end hyphen as U+0002
+                list.Add((ch, x, y));
             }
         }
         finally { Native.FPDFText_ClosePage(textPage); }

@@ -71,10 +71,9 @@ public sealed unsafe partial class PdfDocument
         {
             // Shorten this page to end at the line.
             var box = page.ViewToUser.MapBounds(0, 0, width, y);
-            float l = 0, b = 0, r = 0, t = 0;
-            bool hadCrop = Native.FPDFPage_GetCropBox(page.Handle, &l, &b, &r, &t) != 0;
+            // Both boxes: a crop box inherited from the page tree would otherwise keep the old size.
             Native.FPDFPage_SetMediaBox(page.Handle, (float)box.X, (float)box.Y, (float)box.Right, (float)box.Bottom);
-            if (hadCrop) Native.FPDFPage_SetCropBox(page.Handle, (float)box.X, (float)box.Y, (float)box.Right, (float)box.Bottom);
+            Native.FPDFPage_SetCropBox(page.Handle, (float)box.X, (float)box.Y, (float)box.Right, (float)box.Bottom);
         }
 
         page.Dirty = page.ChangedExisting = true;
