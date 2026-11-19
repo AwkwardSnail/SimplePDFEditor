@@ -14,6 +14,7 @@ public sealed unsafe partial class PdfDocument
     internal void PreserveTextLayout(PageHandle page)
     {
         _glyphCodes.Clear(); // font handles from an earlier page are no longer valid
+        KeepGradients(page); // PDFium leaves gradients out when it writes a page
         int count = Native.FPDFPage_CountObjects(page.Handle);
         var indexOf = new Dictionary<IntPtr, int>(count);
         for (int i = 0; i < count; i++)

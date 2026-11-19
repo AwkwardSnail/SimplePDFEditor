@@ -210,6 +210,12 @@ public class ConformanceTests(ITestOutputHelper output)
     {
         CheckAll(
             ("RTF import", () => PdfDocument.FromRtf(File.ReadAllBytes(Fixture("sample.rtf")), out _)),
+            ("page with gradients edited", () =>
+            {
+                var doc = PdfDocument.Open(PdfDocumentTests.PdfWithGradients());
+                doc.MoveObjects(0, doc.GetDrawings(0)[0].ObjectIndices, 10, 0);
+                return doc;
+            }),
             ("page spread over sheets for printing", () =>
             {
                 using var doc = PdfDocument.Open(Fixture("word-style.pdf"));

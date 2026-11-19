@@ -718,6 +718,74 @@ public class PdfDocumentTests
         Assert.True(changed < expected.Width * expected.Height / 200, $"{changed} pixels differ");
     }
 
+    /// <summary>A green box, a red-to-blue gradient, and a "gradient" that is black all over (as some programs write a transparent one).</summary>
+    internal static byte[] PdfWithGradients()
+    {
+        const string content = "0 1 0 rg 50 700 60 40 re f q 100 500 200 100 re W n /Sh1 sh Q q 100 300 80 20 re W n /Sh2 sh Q";
+        return System.Text.Encoding.ASCII.GetBytes(
+            "%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n" +
+            "3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Contents 4 0 R/Resources<</Shading<</Sh1 5 0 R/Sh2 6 0 R>>>>>>endobj\n" +
+            $"4 0 obj<</Length {content.Length}>>stream\n{content}\nendstream endobj\n" +
+            "5 0 obj<</ShadingType 2/ColorSpace/DeviceRGB/Coords[100 0 300 0]/Extend[true true]/Function<</FunctionType 2/Domain[0 1]/C0[1 0 0]/C1[0 0 1]/N 1>>>>endobj\n" +
+            "6 0 obj<</ShadingType 2/ColorSpace/DeviceRGB/Coords[0 300 0 320]/Extend[true true]/Function<</FunctionType 2/Domain[0 1]/C0[0 0 0]/C1[0 0 0]/N 1>>>>endobj\n" +
+            "trailer<</Root 1 0 R>>\n%%EOF");
+    }
+
+    private static int PixelsThatDiffer(RenderedPage a, RenderedPage b, PdfRect area)
+    {
+        int changed = 0;
+        for (int y = (int)area.Y; y < (int)area.Bottom; y++)
+            for (int x = (int)area.X; x < (int)area.Right; x++)
+            {
+                int i = y * a.Stride + x * 4;
+                if (Math.Abs(a.Pixels[i] - b.Pixels[i]) + Math.Abs(a.Pixels[i + 1] - b.Pixels[i + 1]) + Math.Abs(a.Pixels[i + 2] - b.Pixels[i + 2]) > 30) changed++;
+            }
+        return changed;
+    }
+
+    [Fact]
+    public void Gradients_survive_an_edit_to_their_page()
+    {
+        using var doc = PdfDocument.Open(PdfWithGradients());
+        var before = doc.Render(0, 1, false);
+        // The gradient really is there to begin with: red at its left end, blue at its right.
+        int left = (792 - 550) * before.Stride + 110 * 4, right = (792 - 550) * before.Stride + 290 * 4;
+        Assert.True(before.Pixels[left + 2] > 200 && before.Pixels[left] < 60, "red end");
+        Assert.True(before.Pixels[right] > 200 && before.Pixels[right + 2] < 60, "blue end");
+
+        // Any change to the page makes PDFium write it afresh, which used to drop the gradients.
+        var box = doc.GetDrawings(0).First(d => d.Bounds.Y < 100);
+        doc.MoveObjects(0, box.ObjectIndices, 10, 0);
+        using var saved = Reopen(doc);
+        var after = saved.Render(0, 1, false);
+        var gradient = new PdfRect(102, 792 - 598, 196, 96);
+        Assert.True(PixelsThatDiffer(before, after, gradient) < 60, $"{PixelsThatDiffer(before, after, gradient)} pixels of the gradient changed");
+        var black = new PdfRect(102, 792 - 318, 76, 16);
+        Assert.Equal(0, PixelsThatDiffer(before, after, black));
+        Assert.Equal(2, saved.GetImages(0).Count); // each is now a picture of itself
+    }
+
+    [Fact]
+    public void A_gradient_that_is_one_flat_colour_is_told_apart_and_can_be_removed()
+    {
+        using var doc = PdfDocument.Open(PdfWithGradients());
+        var gradients = doc.GetGradients(0);
+        Assert.Equal(2, gradients.Count);
+        Assert.Null(gradients[0].PlainColour);                          // a real gradient
+        Assert.Equal(new PdfColor(0, 0, 0), gradients[1].PlainColour);  // black all over
+        Assert.Equal(80, gradients[1].Bounds.Width, 0.5);
+
+        doc.RemoveObjects(0, [gradients[1].ObjectIndex]);
+        using var saved = Reopen(doc);
+        var page = saved.Render(0, 1, false);
+        int where = (792 - 310) * page.Stride + 140 * 4;
+        Assert.True(page.Pixels[where] > 240 && page.Pixels[where + 1] > 240 && page.Pixels[where + 2] > 240, "the black box is gone");
+        int kept = (792 - 550) * page.Stride + 110 * 4;
+        Assert.True(page.Pixels[kept + 2] > 200 && page.Pixels[kept] < 60, "the real gradient is still there");
+        Assert.Empty(saved.GetGradients(0)); // nothing is left behind on the copy used for looking
+        Assert.Equal(1, saved.PageCount);
+    }
+
     /// <summary>
     /// A PDF with a proper cross-reference table and two fonts, F1 and F2, each drawing one word.
     /// Both fonts carry (dummy) font data of their own unless told otherwise.

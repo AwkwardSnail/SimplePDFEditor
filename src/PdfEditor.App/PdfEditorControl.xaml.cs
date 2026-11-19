@@ -1198,7 +1198,11 @@ public partial class PdfEditorControl : UserControl
         CommitEditor();
         var p = PagePoint(e);
         var image = _images.LastOrDefault(i => i.Bounds.Contains(p.X, p.Y));
-        if (image is null) return;
+        if (image is null)
+        {
+            e.Handled = ShowGradientMenu(p);
+            return;
+        }
         Focus();
         Select(new Selection(ItemKind.Image, image.ObjectIndex, image.Bounds));
 
@@ -1218,6 +1222,51 @@ public partial class PdfEditorControl : UserControl
         Add("Delete image", DeleteSelection);
         menu.IsOpen = true;
         e.Handled = true;
+    }
+
+    /// <summary>
+    /// A right-click on a shaded box (a gradient) offers to delete it. Boxes that are one flat
+    /// colour all over, as some programs write a see-through effect, can all go at once.
+    /// Returns false when there is no shaded box at the point.
+    /// </summary>
+    private bool ShowGradientMenu(Point p)
+    {
+        IReadOnlyList<GradientInfo> gradients;
+        try { gradients = Doc.GetGradients(_page); }
+        catch (PdfException) { return false; }
+        var hit = gradients.Where(g => g.Bounds.Contains(p.X, p.Y)).OrderBy(g => g.Bounds.Width * g.Bounds.Height).FirstOrDefault();
+        if (hit is null) return false;
+        Focus();
+        Select(new Selection(ItemKind.Drawing, hit.ObjectIndex, hit.Bounds, [hit.ObjectIndex]));
+
+        int page = _page;
+        var menu = new ContextMenu { PlacementTarget = Overlay };
+        void Add(string header, Action action)
+        {
+            var item = new MenuItem { Header = header };
+            item.Click += (_, _) => action();
+            menu.Items.Add(item);
+        }
+        Add("Delete this shaded box", () =>
+        {
+            _selection = null;
+            if (Edit(d => d.RemoveObjects(page, [hit.ObjectIndex]))) ShowStatus("Shaded box deleted. Undo puts it back.");
+        });
+        if (hit.PlainColour is { } colour)
+        {
+            var alike = gradients.Where(g => g.PlainColour == colour).Select(g => g.ObjectIndex).ToList();
+            if (alike.Count > 1)
+            {
+                string name = colour is { R: < 40, G: < 40, B: < 40 } ? "plain black" : colour is { R: > 215, G: > 215, B: > 215 } ? "plain white" : "one-colour";
+                Add($"Delete all {alike.Count} {name} boxes like it on this page", () =>
+                {
+                    _selection = null;
+                    if (Edit(d => d.RemoveObjects(page, alike))) ShowStatus($"{alike.Count} {name} boxes deleted. Undo puts them back.");
+                });
+            }
+        }
+        menu.IsOpen = true;
+        return true;
     }
 
     private void RotateSelectedImage(ImageInfo image, int degrees)
