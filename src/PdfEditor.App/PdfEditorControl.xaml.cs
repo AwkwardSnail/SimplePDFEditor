@@ -375,6 +375,34 @@ public partial class PdfEditorControl : UserControl
         if (!Edit(d => d.AddPage(size.Width, size.Height, at))) { _page = at - 1; RefreshAll(); }
     }
 
+    /// <summary>Saves the current page as a separate PDF spread over sheets of paper. The document itself is not changed.</summary>
+    private void PrintAsTiles_Click(object sender, RoutedEventArgs e)
+    {
+        CommitEditor();
+        EndPageBreak();
+        if (TilesDialog.Show(this, Doc.GetPageSize(_page)) is not { } options) return;
+        string name = Path.GetFileNameWithoutExtension(_session.FilePath ?? _session.SuggestedFileName);
+        var dialog = new SaveFileDialog
+        {
+            Filter = "PDF files|*.pdf", Title = "Save the tiles as", DefaultExt = ".pdf",
+            FileName = $"{name} - tiles{(Doc.PageCount > 1 ? $" (page {_page + 1})" : "")}.pdf",
+        };
+        if (_session.FilePath is { } current) dialog.InitialDirectory = Path.GetDirectoryName(current);
+        if (dialog.ShowDialog(Window.GetWindow(this)) != true) return;
+        if (_session.FilePath is not null && string.Equals(Path.GetFullPath(dialog.FileName), _session.FilePath, StringComparison.OrdinalIgnoreCase))
+        {
+            ShowStatus("The tiles need a file of their own: choose a name other than the document's.");
+            return;
+        }
+        try
+        {
+            using var tiles = Doc.CreateTiles(_page, options);
+            tiles.Save(dialog.FileName);
+            ShowStatus($"Saved {tiles.PageCount} sheet{(tiles.PageCount == 1 ? "" : "s")} to {Path.GetFileName(dialog.FileName)}. Print it at 100% (no fit to page). This document is unchanged.");
+        }
+        catch (Exception ex) { ShowError("The tiles could not be made.", ex); }
+    }
+
     private void InsertFile_Click(object sender, RoutedEventArgs e)
     {
         CommitEditor();

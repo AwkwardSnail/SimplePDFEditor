@@ -21,6 +21,7 @@
                 <Button Content="Rotate" Click="Rotate_Click" ToolTip="Rotate this page a quarter turn clockwise" />
                 <Button x:Name="PageUpButton" Content="Move up" Click="MovePageUp_Click" ToolTip="Move this page earlier" />
                 <Button x:Name="PageDownButton" Content="Move down" Click="MovePageDown_Click" ToolTip="Move this page later" />
+                <Button Content="Print as tiles" Click="PrintAsTiles_Click" ToolTip="Save this page spread over several sheets of paper, to print and join into a poster. The document is not changed" />
             </ToolBar>
             <ToolBar Band="0" BandIndex="2">
                 <Button Content="-" Width="24" Click="ZoomOut_Click" ToolTip="Zoom out (Ctrl+-)" />

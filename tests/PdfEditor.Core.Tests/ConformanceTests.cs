@@ -210,6 +210,11 @@ public class ConformanceTests(ITestOutputHelper output)
     {
         CheckAll(
             ("RTF import", () => PdfDocument.FromRtf(File.ReadAllBytes(Fixture("sample.rtf")), out _)),
+            ("page spread over sheets for printing", () =>
+            {
+                using var doc = PdfDocument.Open(Fixture("word-style.pdf"));
+                return doc.CreateTiles(0, new TileOptions { PaperWidth = 419.5, PaperHeight = 595.3 });
+            }),
             ("RTF import with embedded fonts", () => PdfDocument.FromRtf(File.ReadAllBytes(Fixture("sample.rtf")), out _, new RtfImportOptions { EmbedFonts = true })),
             ("RTF import, then a paragraph edited", () =>
             {

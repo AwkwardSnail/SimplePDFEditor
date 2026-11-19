@@ -99,6 +99,10 @@ Scrolling past the end of a page carries on to the next page. The page list on t
 
 **Page break**: select an item and choose Page break; it and everything below it move to a new page inserted after the current one, starting at the top margin. Footers stay on their page, and comments, highlights and web links go with their text. With nothing selected, Page break shows a line that follows the mouse and settles in the gaps between rows of content; a click breaks the page there (Esc cancels). A very long page, such as a web page saved as one sheet, is cut like paper instead: it ends at the line and the rest goes onto a new page just tall enough for it. Content is moved, never copied, so the file does not grow.
 
+**Print as tiles** saves the current page as a separate PDF spread over several sheets of ordinary paper (an A2 poster on A4 sheets, say), to print and join. Choose the paper, real size or a number of sheets to fit or a scale, the overlap between sheets and the blank edge the printer cannot reach; cut marks and sheet numbers go in the margins. The page is stored once in that file and each sheet shows its own part of it, so the file stays small. The document being edited is not changed.
+
+**Fonts that share a name.** Some PDFs (often made on macOS) hold several different embedded fonts with one name, told apart only by a six-letter prefix. PDFium cannot tell these apart when it rewrites a page, so on opening such fonts are given names of their own (`Helvetica-2`). The page looks the same and the text stays editable; the new names are kept when the file is saved.
+
 **Add page** asks for the new page's size: the same as the current page, A3, A4, A5, Letter, Legal or any size in millimetres, portrait or landscape. The size can be kept for every new page; hold Shift while choosing Add page to be asked again. The kept size is stored in a small file on this computer only.
 
 **Find & replace** (Ctrl+H) replaces text throughout the document and re-flows each paragraph it changes.

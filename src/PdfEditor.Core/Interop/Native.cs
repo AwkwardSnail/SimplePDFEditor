@@ -103,6 +103,9 @@ internal static unsafe class Native
     [DllImport(Lib)] public static extern CULong FPDFAction_GetURIPath(IntPtr doc, IntPtr action, byte* buffer, CULong length);
     [DllImport(Lib)] public static extern int FPDFAnnot_SetURI(IntPtr annot, [MarshalAs(UnmanagedType.LPStr)] string uri);
     [DllImport(Lib)] public static extern int FPDFAnnot_SetBorder(IntPtr annot, float horizontalRadius, float verticalRadius, float borderWidth);
+    [DllImport(Lib)] public static extern IntPtr FPDF_NewXObjectFromPage(IntPtr destDoc, IntPtr srcDoc, int srcPageIndex);
+    [DllImport(Lib)] public static extern void FPDF_CloseXObject(IntPtr xobject);
+    [DllImport(Lib)] public static extern IntPtr FPDF_NewFormObjectFromXObject(IntPtr xobject);
     [DllImport(Lib)] public static extern IntPtr FPDFTextObj_GetRenderedBitmap(IntPtr doc, IntPtr page, IntPtr textObj, float scale);
     [DllImport(Lib)] public static extern int FPDFFormObj_CountObjects(IntPtr formObj);
     [DllImport(Lib)] public static extern IntPtr FPDFFormObj_GetObject(IntPtr formObj, CULong index);

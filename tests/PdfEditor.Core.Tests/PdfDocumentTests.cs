@@ -666,6 +666,58 @@ public class PdfDocumentTests
         Assert.Contains("Group text", saved.GetPageText(0));
     }
 
+    [Fact]
+    public void A_page_can_be_spread_over_sheets_without_the_file_growing()
+    {
+        using var doc = PdfDocument.Open(Path.Combine(AppContext.BaseDirectory, "Fixtures", "word-style.pdf"));
+        var page = doc.GetPageSize(0);
+        byte[] before = doc.ToBytes();
+
+        // A5 sheets, 5 mm blank edge, 10 mm overlap: an A4 page at real size needs two by two.
+        var options = new TileOptions { PaperWidth = 419.5, PaperHeight = 595.3 };
+        var plan = PdfDocument.PlanTiles(page, options);
+        Assert.Equal((2, 2), (plan.Columns, plan.Rows));
+        using var tiles = doc.CreateTiles(0, options);
+        Assert.Equal(4, tiles.PageCount);
+        Assert.All(Enumerable.Range(0, 4), i => Assert.Equal(419.5, tiles.GetPageSize(i).Width, 0.1));
+        // The page is stored once, whatever the number of sheets.
+        byte[] saved = tiles.ToBytes();
+        Assert.True(saved.Length < before.Length * 1.3, $"{before.Length} bytes became {saved.Length}");
+        Assert.Equal(1, doc.PageCount); // the document itself is untouched
+        Assert.Equal(page, doc.GetPageSize(0));
+
+        // Shrunk to fit two sheets side by side, it takes exactly those two.
+        var fitted = options with { Scale = PdfDocument.TileScaleToFit(page, options, 2, 1) };
+        Assert.Equal((2, 1), (PdfDocument.PlanTiles(page, fitted).Columns, PdfDocument.PlanTiles(page, fitted).Rows));
+
+        // What the sheets show together is the page: the title is on the top-left sheet at full size.
+        using var reopened = PdfDocument.Open(saved);
+        Assert.Contains("Awkward Snail", reopened.GetPageText(0) + reopened.GetPageText(1));
+        Assert.Contains("Row 2, column 1", reopened.GetPageText(2));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(90)]
+    [InlineData(180)]
+    [InlineData(270)]
+    public void Tiles_show_a_turned_page_the_way_it_is_seen(int rotation)
+    {
+        using var doc = PdfDocument.Open(Path.Combine(AppContext.BaseDirectory, "Fixtures", "word-style.pdf"));
+        doc.SetPageRotation(0, rotation);
+        var page = doc.GetPageSize(0);
+        // One sheet exactly the size of the page, nothing added: it must look like the page.
+        using var tiles = doc.CreateTiles(0, new TileOptions { PaperWidth = page.Width, PaperHeight = page.Height, Margin = 0, Overlap = 0, CutMarks = false });
+        Assert.Equal(1, tiles.PageCount);
+        var expected = doc.Render(0, 1, false);
+        var actual = tiles.Render(0, 1, false);
+        Assert.Equal((expected.Width, expected.Height), (actual.Width, actual.Height));
+        int changed = 0;
+        for (int i = 0; i < expected.Pixels.Length; i += 4)
+            if (Math.Abs(expected.Pixels[i] - actual.Pixels[i]) + Math.Abs(expected.Pixels[i + 1] - actual.Pixels[i + 1]) + Math.Abs(expected.Pixels[i + 2] - actual.Pixels[i + 2]) > 120) changed++;
+        Assert.True(changed < expected.Width * expected.Height / 200, $"{changed} pixels differ");
+    }
+
     /// <summary>
     /// A PDF with a proper cross-reference table and two fonts, F1 and F2, each drawing one word.
     /// Both fonts carry (dummy) font data of their own unless told otherwise.
