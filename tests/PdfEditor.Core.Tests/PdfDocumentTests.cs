@@ -450,6 +450,49 @@ public class PdfDocumentTests
     }
 
     [Fact]
+    public void A_page_break_moves_what_is_below_onto_a_new_page()
+    {
+        using var doc = PdfDocument.Open(Path.Combine(AppContext.BaseDirectory, "Fixtures", "word-style.pdf"));
+        doc.AddPage();                                                          // a page that must end up third
+        var paragraphs = doc.GetParagraphs(0);
+        var first = paragraphs.First(p => p.Text.StartsWith("Its shell"));     // the break goes above this paragraph
+        var footer = paragraphs.First(p => p.Text == "Page 1");
+        double topMargin = paragraphs.Min(p => p.Bounds.Y);
+        doc.HighlightText(0, "left-coiling");                                   // in the moved part
+        doc.HighlightText(0, "garden snail");                                   // in the part that stays
+        int images = doc.GetImages(0).Count;
+
+        int moved = doc.InsertPageBreak(0, first.Bounds.Y);
+        Assert.True(moved > 5);
+        using var saved = Reopen(doc);
+        Assert.Equal(3, saved.PageCount);
+        Assert.Equal(doc.GetPageSize(0), saved.GetPageSize(1));
+
+        var stay = saved.GetParagraphs(0).Select(p => p.Text).ToList();
+        var go = saved.GetParagraphs(1);
+        Assert.Contains(stay, t => t.StartsWith("The common garden snail"));
+        Assert.Contains("Page 1", stay);                                        // the footer stays
+        Assert.DoesNotContain(stay, t => t.StartsWith("Its shell"));
+        Assert.StartsWith("Its shell", go[0].Text);
+        Assert.Contains(go, p => p.Text.StartsWith("A large snail"));
+        Assert.Equal(first.Bounds.X, go[0].Bounds.X, 1);
+        Assert.InRange(go[0].Bounds.Y, topMargin - 3, topMargin + 3);           // starts at the top margin (measured at the ink, so within a few points)
+        Assert.Equal(2, go[0].LineCount);
+        Assert.Equal(footer.Bounds, saved.GetParagraphs(0).First(p => p.Text == "Page 1").Bounds);
+        Assert.Equal(images, saved.GetImages(1).Count);
+        Assert.Empty(saved.GetImages(0));
+
+        // Each highlight is with its text.
+        var stayed = saved.GetAnnotations(0).Single();
+        var went = saved.GetAnnotations(1).Single();
+        Assert.Equal(saved.FindText(0, "garden snail").First().Rects[0].Y, stayed.Bounds.Y, 0);
+        Assert.Equal(saved.FindText(1, "left-coiling").Single().Rects[0].Y, went.Bounds.Y, 0);
+
+        Assert.Equal(0, saved.InsertPageBreak(2, 100));                         // nothing on the blank page: no page added
+        Assert.Equal(3, saved.PageCount);
+    }
+
+    [Fact]
     public void Bad_input_gives_clear_errors()
     {
         Assert.Throws<PdfException>(() => PdfDocument.Open(new byte[] { 1, 2, 3, 4 }));

@@ -93,7 +93,9 @@ or open `PdfEditor.sln` in Visual Studio and run `PdfEditor.App`. A PDF path on 
 
 Vector drawings (shapes that sit together) are selected, moved and deleted as one item. A click on something inside a group (a header or logo block stored as one unit) takes the group apart so its parts can be selected; where the group's text cannot safely stay text, it becomes shapes that look the same.
 
-Scrolling past the end of a page carries on to the next page. The page list on the left can be resized by dragging its edge, and pages reordered by dragging them.
+Scrolling past the end of a page carries on to the next page. The page list on the left can be resized by dragging its edge, and pages reordered by dragging them: a line shows where the page will land. The comments panel on the right can be hidden with the button on its edge.
+
+**Page break**: select an item and choose Page break; it and everything below it move to a new page inserted after the current one, starting at the top margin. Footers stay on their page, and comments and highlights go with their text.
 
 **Find & replace** (Ctrl+H) replaces text throughout the document and re-flows each paragraph it changes.
 

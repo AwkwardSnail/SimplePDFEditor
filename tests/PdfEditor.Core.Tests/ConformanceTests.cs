@@ -146,6 +146,11 @@ public class ConformanceTests(ITestOutputHelper output)
                 d.SetParagraphAlignment(0, Paragraph(d, "Its shell"), TextAlignment.Center);
             })),
             ("find and replace", () => Edited("word-style.pdf", d => d.ReplaceText("snail", "slug"))),
+            ("page break", () => Edited("word-style.pdf", d =>
+            {
+                d.HighlightText(0, "left-coiling");
+                d.InsertPageBreak(0, d.GetParagraphs(0).First(p => p.Text.StartsWith("Its shell")).Bounds.Y);
+            })),
             ("paragraph removed in a justified two-column file", () => Edited("two-columns.pdf", d => d.ReplaceParagraphText(0, 1, ""))),
             ("comment and highlight on an existing file", () => Edited("word-style.pdf", d =>
             {

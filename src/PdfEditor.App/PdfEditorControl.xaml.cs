@@ -1062,21 +1062,54 @@ public partial class PdfEditorControl : UserControl
         int index = _thumbDragIndex;
         _thumbDragStart = null;
         DragDrop.DoDragDrop(Thumbs, new DataObject(PageDragFormat, index), DragDropEffects.Move);
+        DropLine.Visibility = Visibility.Collapsed; // the drag is over, wherever it ended
     }
+
+    /// <summary>
+    /// The gap between pages nearest the mouse: 0 is before the first page, the page count is
+    /// after the last. Also gives the height at which to draw the line marking that gap.
+    /// </summary>
+    private int DropGapAt(DragEventArgs e, out double lineY)
+    {
+        double y = e.GetPosition(Thumbs).Y;
+        lineY = 0;
+        int gap = 0;
+        for (int i = 0; i < _pages.Count; i++)
+        {
+            // Pages scrolled out of view have no visual; they cannot be under the mouse.
+            if (Thumbs.ItemContainerGenerator.ContainerFromIndex(i) is not ListBoxItem item) continue;
+            double top = item.TranslatePoint(new Point(0, 0), Thumbs).Y;
+            if (y < top + item.ActualHeight / 2)
+            {
+                lineY = top;
+                return i;
+            }
+            lineY = top + item.ActualHeight;
+            gap = i + 1;
+        }
+        return gap;
+    }
+
+    private void Thumbs_DragLeave(object sender, DragEventArgs e) => DropLine.Visibility = Visibility.Collapsed;
 
     private void Thumbs_DragOver(object sender, DragEventArgs e)
     {
         if (!e.Data.GetDataPresent(PageDragFormat)) return; // a file being dropped: the editor handles it
         e.Effects = DragDropEffects.Move;
         e.Handled = true;
+        DropGapAt(e, out double lineY);
+        DropLine.Margin = new Thickness(6, Math.Clamp(lineY - 1.5, 0, Math.Max(0, Thumbs.ActualHeight - 3)), 6, 0);
+        DropLine.Visibility = Visibility.Visible;
     }
 
     private void Thumbs_Drop(object sender, DragEventArgs e)
     {
         if (e.Data.GetData(PageDragFormat) is not int from) return;
         e.Handled = true;
-        int to = ThumbIndexAt(e.OriginalSource);
-        if (to < 0) to = Doc.PageCount - 1; // dropped below the last page
+        DropLine.Visibility = Visibility.Collapsed;
+        // The page lands in the gap the line marked; taking it out first shifts later gaps up by one.
+        int gap = DropGapAt(e, out _);
+        int to = gap > from ? gap - 1 : gap;
         if (from < 0 || from >= Doc.PageCount || to == from) return;
         CommitEditor();
         _selection = null;
@@ -1084,6 +1117,57 @@ public partial class PdfEditorControl : UserControl
         _page = to;
         if (!Edit(d => d.MovePage(from, to))) { _page = previous; RefreshAll(); }
         else ShowStatus($"Page {from + 1} moved to position {to + 1}.");
+    }
+
+    // ------------------------------------------------------------------ comments panel and page breaks
+
+    private void NotesToggle_Click(object sender, RoutedEventArgs e)
+    {
+        bool show = NotesPanel.Visibility != Visibility.Visible;
+        NotesPanel.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        NotesToggle.Content = show ? "»" : "«";
+        NotesToggle.ToolTip = show ? "Hide the comments panel" : "Show comments and highlights";
+    }
+
+    /// <summary>Breaks the page above the selected item: it and everything below it go onto a new page.</summary>
+    private void PageBreak_Click(object sender, RoutedEventArgs e)
+    {
+        CommitEditor();
+        if (_selection is not { } s || s.Kind == ItemKind.Annotation)
+        {
+            ShowStatus("Select the text, picture or drawing that should start the new page, then choose Page break.");
+            return;
+        }
+        // For text, break above its whole paragraph, not through the middle of it.
+        double y = s.Bounds.Y;
+        if (s.Kind == ItemKind.Text && SelectedParagraph() is { } paragraph) y = Math.Min(y, paragraph.Bounds.Y);
+        int page = _page;
+        int moved = 0;
+        try
+        {
+            _session.Apply(d =>
+            {
+                moved = d.InsertPageBreak(page, y - 1);
+                if (moved == 0) throw new InvalidOperationException("nothing to move");
+            });
+        }
+        catch (InvalidOperationException)
+        {
+            RefreshAll();
+            ShowStatus("Nothing could be moved: the selected item is in the footer area, which stays on its page.");
+            return;
+        }
+        catch (Exception ex)
+        {
+            ShowError("The page break could not be made.", ex);
+            RefreshAll();
+            return;
+        }
+        _selection = null;
+        _page = page + 1;
+        RefreshAll();
+        PageScroll.ScrollToTop();
+        ShowStatus($"Page break added: {moved} item{(moved == 1 ? "" : "s")} moved to the new page {page + 2}. Undo puts them back.");
     }
 
     private void OnDrop(object sender, DragEventArgs e)
