@@ -493,6 +493,69 @@ public class PdfDocumentTests
     }
 
     [Fact]
+    public void Images_can_be_rotated_read_and_replaced()
+    {
+        using var doc = PdfDocument.Create();
+        doc.AddPage();
+        doc.AddImage(0, Png, x: 100, y: 200, width: 120, height: 60);   // red top-left, green top-right, blue bottom-left, white bottom-right
+        var image = doc.GetImages(0).Single();
+        (int, int, int) At(PdfDocument d, PdfRect r, double fx, double fy)
+        {
+            var page = d.Render(0);
+            int i = (int)(r.Y + r.Height * fy) * page.Stride + (int)(r.X + r.Width * fx) * 4;
+            return (page.Pixels[i + 2] > 128 ? 1 : 0, page.Pixels[i + 1] > 128 ? 1 : 0, page.Pixels[i] > 128 ? 1 : 0);
+        }
+        Assert.Equal((1, 0, 0), At(doc, image.Bounds, 0.25, 0.25));
+
+        // Pixels come back as stored: 2 x 2, red first (BGRA order).
+        var pixels = doc.GetImagePixels(0, image.ObjectIndex);
+        Assert.Equal((2, 2), (pixels.Width, pixels.Height));
+        Assert.Equal(new byte[] { 0, 0, 255, 255 }, pixels.Pixels.Take(4));
+
+        // A quarter turn clockwise: the outline swaps width and height about the same centre,
+        // and the red corner goes from top-left to top-right.
+        doc.RotateImage(0, image.ObjectIndex, 90);
+        var turned = doc.GetImages(0).Single().Bounds;
+        Assert.Equal(new PdfRect(130, 170, 60, 120), Round(turned));
+        Assert.Equal((1, 0, 0), At(doc, turned, 0.75, 0.25));
+        Assert.Equal((0, 0, 1), At(doc, turned, 0.25, 0.25));       // blue was bottom-left, now top-left
+        doc.RotateImage(0, image.ObjectIndex, -90);
+        Assert.Equal(Round(image.Bounds), Round(doc.GetImages(0).Single().Bounds));
+        Assert.Equal((1, 0, 0), At(doc, image.Bounds, 0.25, 0.25));
+
+        // Replaced by an all-blue picture of the same proportions as the stored one (2 x 2 -> 4 x 4),
+        // as when an edited copy comes back: the placement does not change.
+        byte[] Blue(int w, int h) { var b = new byte[w * h * 4]; for (int i = 0; i < b.Length; i += 4) { b[i] = 255; b[i + 3] = 255; } return b; }
+        doc.RotateImage(0, image.ObjectIndex, 90);                  // replace while turned: the turn must be kept
+        doc.ReplaceImage(0, image.ObjectIndex, EncodeBmp(Blue(4, 4), 4, 4));
+        Assert.Equal(Round(turned), Round(doc.GetImages(0).Single().Bounds));
+        Assert.Equal((0, 0, 1), At(doc, turned, 0.5, 0.5));
+
+        // Replaced by a picture of other proportions (4 wide, 8 high): fitted inside the outline,
+        // centred, in its true shape. The image is turned, so its width runs down the page.
+        doc.ReplaceImage(0, image.ObjectIndex, EncodeBmp(Blue(4, 8), 4, 8));
+        using var saved = Reopen(doc);
+        var replaced = saved.GetImages(0).Single();
+        Assert.Equal((4, 8), (replaced.PixelWidth, replaced.PixelHeight));
+        Assert.Equal(new PdfRect(130, 215, 60, 30), Round(replaced.Bounds));
+        Assert.Equal((0, 0, 1), At(saved, replaced.Bounds, 0.5, 0.5));
+        Assert.Throws<PdfException>(() => saved.ReplaceImage(0, replaced.ObjectIndex, new byte[] { 1, 2, 3 }));
+    }
+
+    /// <summary>A 32-bit BMP file from top-down BGRA pixels.</summary>
+    private static byte[] EncodeBmp(byte[] bgra, int width, int height)
+    {
+        using var ms = new MemoryStream();
+        using var w = new BinaryWriter(ms);
+        w.Write((byte)'B'); w.Write((byte)'M'); w.Write(54 + bgra.Length); w.Write(0); w.Write(54);
+        w.Write(40); w.Write(width); w.Write(-height); w.Write((short)1); w.Write((short)32); w.Write(0); w.Write(bgra.Length);
+        w.Write(2835); w.Write(2835); w.Write(0); w.Write(0);
+        w.Write(bgra);
+        w.Flush();
+        return ms.ToArray();
+    }
+
+    [Fact]
     public void Bad_input_gives_clear_errors()
     {
         Assert.Throws<PdfException>(() => PdfDocument.Open(new byte[] { 1, 2, 3, 4 }));

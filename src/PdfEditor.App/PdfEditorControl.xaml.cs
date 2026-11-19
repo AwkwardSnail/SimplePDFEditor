@@ -1119,6 +1119,123 @@ public partial class PdfEditorControl : UserControl
         else ShowStatus($"Page {from + 1} moved to position {to + 1}.");
     }
 
+    // ------------------------------------------------------------------ image menu
+
+    /// <summary>Right-clicking an image selects it and offers what can be done with it.</summary>
+    private void Overlay_RightClick(object sender, MouseButtonEventArgs e)
+    {
+        CommitEditor();
+        var p = PagePoint(e);
+        var image = _images.LastOrDefault(i => i.Bounds.Contains(p.X, p.Y));
+        if (image is null) return;
+        Focus();
+        Select(new Selection(ItemKind.Image, image.ObjectIndex, image.Bounds));
+
+        var menu = new ContextMenu { PlacementTarget = Overlay };
+        void Add(string header, Action action)
+        {
+            var item = new MenuItem { Header = header };
+            item.Click += (_, _) => action();
+            menu.Items.Add(item);
+        }
+        Add("Edit image in Paint...", () => EditImageInPaint(image));
+        Add("Rotate right", () => RotateSelectedImage(image, 90));
+        Add("Rotate left", () => RotateSelectedImage(image, -90));
+        Add("Resize image...", () => ResizeImage(image));
+        Add("Replace image...", () => ReplaceImage(image));
+        menu.Items.Add(new Separator());
+        Add("Delete image", DeleteSelection);
+        menu.IsOpen = true;
+        e.Handled = true;
+    }
+
+    private void RotateSelectedImage(ImageInfo image, int degrees)
+    {
+        int page = _page;
+        Edit(d => d.RotateImage(page, image.ObjectIndex, degrees));
+    }
+
+    private void ResizeImage(ImageInfo image)
+    {
+        if (ImageSizeDialog.Show(this, image.Bounds.Width, image.Bounds.Height) is not { } size) return;
+        int page = _page;
+        // The top-left corner stays where it is.
+        Edit(d => d.SetImageBounds(page, image.ObjectIndex, new PdfRect(image.Bounds.X, image.Bounds.Y, size.Width, size.Height)));
+    }
+
+    private void ReplaceImage(ImageInfo image)
+    {
+        var dialog = new OpenFileDialog { Filter = "Images|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tga|All files|*.*", Title = "Replace the image with" };
+        if (dialog.ShowDialog(Window.GetWindow(this)) != true) return;
+        byte[] data;
+        try { data = File.ReadAllBytes(dialog.FileName); }
+        catch (Exception ex) { ShowError("Could not read the image file.", ex); return; }
+        int page = _page;
+        if (Edit(d => d.ReplaceImage(page, image.ObjectIndex, data)))
+            ShowStatus("Image replaced. It keeps the old image's place; a picture of other proportions is fitted inside the old outline.");
+    }
+
+    /// <summary>
+    /// Opens the image in Paint as a temporary PNG file. When the user has saved there and
+    /// confirms here, the edited picture replaces the image. The temporary file is then deleted.
+    /// </summary>
+    private void EditImageInPaint(ImageInfo image)
+    {
+        int page = _page;
+        string folder = Path.Combine(Path.GetTempPath(), "PdfEditor");
+        string file = Path.Combine(folder, $"image-{Guid.NewGuid():N}.png");
+        try
+        {
+            var pixels = Doc.GetImagePixels(page, image.ObjectIndex);
+            Directory.CreateDirectory(folder);
+            var bitmap = BitmapSource.Create(pixels.Width, pixels.Height, 96, 96, PixelFormats.Bgra32, null, pixels.Pixels, pixels.Stride);
+            var encoder = new PngBitmapEncoder();
+            encoder.Frames.Add(BitmapFrame.Create(bitmap));
+            using (var stream = File.Create(file)) encoder.Save(stream);
+        }
+        catch (Exception ex)
+        {
+            ShowError("The image could not be prepared for editing.", ex);
+            return;
+        }
+
+        try
+        {
+            var written = File.GetLastWriteTimeUtc(file);
+            try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("mspaint.exe", $"\"{file}\"") { UseShellExecute = true }); }
+            catch (Exception ex)
+            {
+                ShowError("Paint could not be started.", ex);
+                return;
+            }
+            var answer = MessageBox.Show(Window.GetWindow(this),
+                "The image is open in Paint.\n\nMake your changes, save in Paint (Ctrl+S), then choose OK here to bring the edited image into the document.\n\nCancel leaves the image as it was.",
+                "Edit image", MessageBoxButton.OKCancel, MessageBoxImage.Information);
+            if (answer != MessageBoxResult.OK) return;
+            if (File.GetLastWriteTimeUtc(file) == written)
+            {
+                ShowStatus("The image was not saved in Paint, so nothing changed.");
+                return;
+            }
+            byte[] edited;
+            using (var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            using (var memory = new MemoryStream())
+            {
+                stream.CopyTo(memory);
+                edited = memory.ToArray();
+            }
+            if (Edit(d => d.ReplaceImage(page, image.ObjectIndex, edited))) ShowStatus("The edited image is in the document. Undo brings the old one back.");
+        }
+        catch (Exception ex)
+        {
+            ShowError("The edited image could not be brought back.", ex);
+        }
+        finally
+        {
+            try { File.Delete(file); } catch (Exception) { /* Paint may still hold it; it is in the temporary folder */ }
+        }
+    }
+
     // ------------------------------------------------------------------ comments panel and page breaks
 
     private void NotesToggle_Click(object sender, RoutedEventArgs e)

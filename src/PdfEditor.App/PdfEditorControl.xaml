@@ -116,7 +116,8 @@
                     <Grid>
                         <Image x:Name="PageImage" Stretch="Fill" />
                         <Canvas x:Name="Overlay" Background="Transparent" ClipToBounds="True"
-                                MouseLeftButtonDown="Overlay_MouseDown" MouseMove="Overlay_MouseMove" MouseLeftButtonUp="Overlay_MouseUp" />
+                                MouseLeftButtonDown="Overlay_MouseDown" MouseMove="Overlay_MouseMove" MouseLeftButtonUp="Overlay_MouseUp"
+                                MouseRightButtonDown="Overlay_RightClick" />
                     </Grid>
                 </Border>
             </ScrollViewer>
