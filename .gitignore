@@ -485,3 +485,6 @@ $RECYCLE.BIN/
 
 # MSIX build output (packaging\pack.ps1)
 packaging/out/
+
+# The stock rule *.app (macOS bundles) also matches this folder on Windows, where names are case-insensitive.
+!src/PdfEditor.App/
