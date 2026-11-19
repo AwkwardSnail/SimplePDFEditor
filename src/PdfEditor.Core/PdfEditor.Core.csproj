@@ -9,6 +9,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="PdfEditor.Core.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="bblanchon.PDFium.Linux" Version="160.0.8165" />
     <PackageReference Include="bblanchon.PDFium.macOS" Version="160.0.8165" />
     <PackageReference Include="bblanchon.PDFium.Win32" Version="160.0.8165" />

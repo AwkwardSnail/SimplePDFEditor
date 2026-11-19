@@ -78,7 +78,7 @@ public sealed unsafe partial class PdfDocument
         static string Normalize(string s) => string.Concat(s.Where(c => !char.IsWhiteSpace(c) && c != '\0'));
     }
 
-    private static string StandardFontName(TextStyle s) => (s.Font, s.Bold, s.Italic) switch
+    internal static string StandardFontName(TextStyle s) => (s.Font, s.Bold, s.Italic) switch
     {
         (StandardFont.Times, false, false) => "Times-Roman",
         (StandardFont.Times, true, false) => "Times-Bold",
@@ -95,7 +95,7 @@ public sealed unsafe partial class PdfDocument
     };
 
     /// <summary>Loads (once per document) and embeds a TrueType font file.</summary>
-    private IntPtr LoadFont(string path)
+    internal IntPtr LoadFont(string path)
     {
         string key = Path.GetFullPath(path);
         if (_fonts.TryGetValue(key, out var font)) return font;
@@ -108,12 +108,13 @@ public sealed unsafe partial class PdfDocument
     }
 
     /// <summary>Finds a broad-coverage font installed on this machine, matching the style where possible.</summary>
-    private static string? FindSystemFont(TextStyle style)
+    internal static string? FindSystemFont(TextStyle style)
     {
         string suffix = (style.Bold, style.Italic) switch { (true, true) => "bi", (true, false) => "bd", (false, true) => "i", _ => "" };
         string dejaVu = (style.Bold, style.Italic) switch { (true, true) => "-BoldOblique", (true, false) => "-Bold", (false, true) => "-Oblique", _ => "" };
+        string liberation = (style.Bold, style.Italic) switch { (true, true) => "BoldItalic", (true, false) => "Bold", (false, true) => "Italic", _ => "Regular" };
         string windows = Environment.GetFolderPath(Environment.SpecialFolder.Fonts);
-        string[] candidates =
+        string[] sans =
         [
             Path.Combine(windows, $"arial{suffix}.ttf"),
             Path.Combine(windows, "arial.ttf"),
@@ -124,6 +125,29 @@ public sealed unsafe partial class PdfDocument
             "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
             "/Library/Fonts/Arial Unicode.ttf",
         ];
+        // Keep the look of the text: serif for serif, monospaced for monospaced, falling back to sans.
+        string[] family = style.Font switch
+        {
+            StandardFont.Times =>
+            [
+                Path.Combine(windows, $"times{suffix}.ttf"),
+                Path.Combine(windows, "times.ttf"),
+                $"/usr/share/fonts/truetype/liberation/LiberationSerif-{liberation}.ttf",
+                $"/usr/share/fonts/truetype/dejavu/DejaVuSerif{dejaVu.Replace("Oblique", "Italic")}.ttf",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
+                "/System/Library/Fonts/Supplemental/Times New Roman.ttf",
+            ],
+            StandardFont.Courier =>
+            [
+                Path.Combine(windows, $"cour{suffix}.ttf"),
+                Path.Combine(windows, "cour.ttf"),
+                $"/usr/share/fonts/truetype/liberation/LiberationMono-{liberation}.ttf",
+                $"/usr/share/fonts/truetype/dejavu/DejaVuSansMono{dejaVu}.ttf",
+                "/System/Library/Fonts/Supplemental/Courier New.ttf",
+            ],
+            _ => [],
+        };
+        string[] candidates = [.. family, .. sans];
         return candidates.FirstOrDefault(c => !string.IsNullOrEmpty(Path.GetDirectoryName(c)) && File.Exists(c));
     }
 
@@ -188,7 +212,7 @@ public sealed unsafe partial class PdfDocument
     {
         using var page = OpenPage(pageIndex);
         var obj = GetObject(page, objectIndex, Native.PAGEOBJ_TEXT, "text");
-        page.Dirty = true;
+        page.Dirty = page.ChangedExisting = true;
 
         if (string.IsNullOrEmpty(newText))
         {
@@ -225,7 +249,7 @@ public sealed unsafe partial class PdfDocument
         return TextEditResult.SubstitutedFont;
     }
 
-    private static string ReadObjectText(IntPtr textObj, IntPtr textPage)
+    internal static string ReadObjectText(IntPtr textObj, IntPtr textPage)
     {
         int bytes = (int)Native.FPDFTextObj_GetText(textObj, textPage, null, new CULong(0)).Value;
         if (bytes <= 2) return "";
@@ -234,7 +258,7 @@ public sealed unsafe partial class PdfDocument
         return new string(buffer, 0, buffer.Length - 1);
     }
 
-    private static string FontName(IntPtr textObj)
+    internal static string FontName(IntPtr textObj)
     {
         var font = Native.FPDFTextObj_GetFont(textObj);
         if (font == IntPtr.Zero) return "";
@@ -371,7 +395,7 @@ public sealed unsafe partial class PdfDocument
         var obj = GetObject(page, objectIndex, Native.PAGEOBJ_IMAGE, "image");
         var m = Affine.Concat(new Affine(bounds.Width, 0, 0, -bounds.Height, bounds.X, bounds.Bottom), page.ViewToUser).ToNative();
         Native.FPDFPageObj_SetMatrix(obj, &m);
-        page.Dirty = true;
+        page.Dirty = page.ChangedExisting = true;
     }
 
     public IReadOnlyList<ImageInfo> GetImages(int pageIndex)
@@ -399,7 +423,7 @@ public sealed unsafe partial class PdfDocument
         var obj = GetObject(page, objectIndex);
         if (Native.FPDFPage_RemoveObject(page.Handle, obj) == 0) throw new PdfException("Could not remove the item.");
         Native.FPDFPageObj_Destroy(obj);
-        page.Dirty = true;
+        page.Dirty = page.ChangedExisting = true;
     }
 
     /// <summary>Moves a text run or image by an offset in view space.</summary>
@@ -414,7 +438,7 @@ public sealed unsafe partial class PdfDocument
         m.e += (float)(v.A * dx + v.C * dy);
         m.f += (float)(v.B * dx + v.D * dy);
         Native.FPDFPageObj_SetMatrix(obj, &m);
-        page.Dirty = true;
+        page.Dirty = page.ChangedExisting = true;
     }
 
     private static IntPtr GetObject(PageHandle page, int objectIndex, int? requiredType = null, string what = "item")

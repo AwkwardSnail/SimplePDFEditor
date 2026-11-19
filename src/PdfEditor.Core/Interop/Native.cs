@@ -69,6 +69,13 @@ internal static unsafe class Native
     [DllImport(Lib)] public static extern int FPDFPage_GetRotation(IntPtr page);
     [DllImport(Lib)] public static extern void FPDFPage_SetRotation(IntPtr page, int rotate);
     [DllImport(Lib)] public static extern void FPDFPage_InsertObject(IntPtr page, IntPtr obj);
+    [DllImport(Lib)] public static extern int FPDFPage_InsertObjectAtIndex(IntPtr page, IntPtr obj, nuint index);
+    [DllImport(Lib)] public static extern IntPtr FPDFPageObj_GetClipPath(IntPtr obj);
+    [DllImport(Lib)] public static extern int FPDFText_SetPositions(IntPtr textObj, float* positions, nuint count);
+    [DllImport(Lib)] public static extern int FPDFClipPath_CountPaths(IntPtr clip);
+    [DllImport(Lib)] public static extern int FPDFClipPath_CountPathSegments(IntPtr clip, int pathIndex);
+    [DllImport(Lib)] public static extern IntPtr FPDFClipPath_GetPathSegment(IntPtr clip, int pathIndex, int segmentIndex);
+    [DllImport(Lib)] public static extern int FPDFPathSegment_GetPoint(IntPtr segment, float* x, float* y);
     [DllImport(Lib)] public static extern int FPDFPage_RemoveObject(IntPtr page, IntPtr obj);
     [DllImport(Lib)] public static extern int FPDFPage_CountObjects(IntPtr page);
     [DllImport(Lib)] public static extern IntPtr FPDFPage_GetObject(IntPtr page, int index);
@@ -112,6 +119,21 @@ internal static unsafe class Native
     [DllImport(Lib)] public static extern int FPDFText_GetSchCount(IntPtr search);
     [DllImport(Lib)] public static extern void FPDFText_FindClose(IntPtr search);
 
+    [DllImport(Lib)] public static extern uint FPDFText_GetUnicode(IntPtr textPage, int index);
+    [DllImport(Lib)] public static extern int FPDFText_IsGenerated(IntPtr textPage, int index);
+    [DllImport(Lib)] public static extern int FPDFText_IsHyphen(IntPtr textPage, int index);
+    [DllImport(Lib)] public static extern int FPDFText_GetCharOrigin(IntPtr textPage, int index, double* x, double* y);
+    [DllImport(Lib)] public static extern int FPDFText_GetLooseCharBox(IntPtr textPage, int index, FS_RECTF* rect);
+    [DllImport(Lib)] public static extern IntPtr FPDFText_GetTextObject(IntPtr textPage, int index);
+    [DllImport(Lib)] public static extern IntPtr FPDFText_LoadStandardFont(IntPtr doc, [MarshalAs(UnmanagedType.LPStr)] string font);
+    [DllImport(Lib)] public static extern int FPDFFont_GetGlyphWidth(IntPtr font, uint glyph, float fontSize, float* width);
+    [DllImport(Lib)] public static extern int FPDFFont_GetIsEmbedded(IntPtr font);
+    [DllImport(Lib)] public static extern int FPDFTextObj_GetTextRenderMode(IntPtr textObj);
+    [DllImport(Lib)] public static extern int FPDFTextObj_SetTextRenderMode(IntPtr textObj, int mode);
+    [DllImport(Lib)] public static extern int FPDFPageObj_GetStrokeColor(IntPtr obj, uint* r, uint* g, uint* b, uint* a);
+    [DllImport(Lib)] public static extern int FPDFPageObj_SetStrokeColor(IntPtr obj, uint r, uint g, uint b, uint a);
+    [DllImport(Lib)] public static extern void FPDFPageObj_Transform(IntPtr obj, double a, double b, double c, double d, double e, double f);
+
     // ---- fpdf_annot.h ----
     [DllImport(Lib)] public static extern IntPtr FPDFPage_CreateAnnot(IntPtr page, int subtype);
     [DllImport(Lib)] public static extern int FPDFPage_GetAnnotCount(IntPtr page);
@@ -121,6 +143,10 @@ internal static unsafe class Native
     [DllImport(Lib)] public static extern int FPDFAnnot_GetSubtype(IntPtr annot);
     [DllImport(Lib)] public static extern int FPDFAnnot_SetRect(IntPtr annot, FS_RECTF* rect);
     [DllImport(Lib)] public static extern int FPDFAnnot_GetRect(IntPtr annot, FS_RECTF* rect);
+    [DllImport(Lib)] public static extern nuint FPDFAnnot_CountAttachmentPoints(IntPtr annot);
+    [DllImport(Lib)] public static extern int FPDFAnnot_GetAttachmentPoints(IntPtr annot, nuint index, FS_QUADPOINTSF* quad);
+    [DllImport(Lib)] public static extern int FPDFAnnot_SetAttachmentPoints(IntPtr annot, nuint index, FS_QUADPOINTSF* quad);
+    [DllImport(Lib)] public static extern int FPDFAnnot_SetAP(IntPtr annot, int mode, [MarshalAs(UnmanagedType.LPWStr)] string? value);
     [DllImport(Lib)] public static extern int FPDFAnnot_AppendAttachmentPoints(IntPtr annot, FS_QUADPOINTSF* quad);
     [DllImport(Lib)] public static extern int FPDFAnnot_SetColor(IntPtr annot, int type, uint r, uint g, uint b, uint a);
     [DllImport(Lib)] public static extern int FPDFAnnot_GetColor(IntPtr annot, int type, uint* r, uint* g, uint* b, uint* a);

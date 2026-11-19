@@ -34,6 +34,8 @@
                 <RadioButton GroupName="Tool" Content="Highlight" Tag="Highlight" Checked="Tool_Checked" ToolTip="Drag across text to highlight it" />
                 <RadioButton GroupName="Tool" Content="Comment" Tag="Comment" Checked="Tool_Checked" ToolTip="Click on the page to leave a comment" />
                 <Button Content="Image" Click="AddImage_Click" ToolTip="Place an image on this page" />
+                <Separator />
+                <Button Content="Find &amp; replace" Click="FindReplace_Click" ToolTip="Replace text throughout the document; changed paragraphs re-flow (Ctrl+H)" />
             </ToolBar>
             <ToolBar Band="1" BandIndex="1">
                 <TextBlock Text="Text:" VerticalAlignment="Center" Margin="4,0" />
@@ -58,6 +60,13 @@
                 <Separator />
                 <TextBlock Text="Highlight:" VerticalAlignment="Center" Margin="4,0" />
                 <ComboBox x:Name="HighlightBox" Width="90" ToolTip="Highlight colour" />
+            </ToolBar>
+            <ToolBar Band="1" BandIndex="2">
+                <TextBlock Text="Paragraph:" VerticalAlignment="Center" Margin="4,0" />
+                <Button Content="Left" Tag="Left" Click="Align_Click" ToolTip="Align the selected paragraph left" />
+                <Button Content="Centre" Tag="Center" Click="Align_Click" ToolTip="Centre the selected paragraph" />
+                <Button Content="Right" Tag="Right" Click="Align_Click" ToolTip="Align the selected paragraph right" />
+                <Button Content="Justify" Tag="Justify" Click="Align_Click" ToolTip="Justify the selected paragraph" />
             </ToolBar>
         </ToolBarTray>
 

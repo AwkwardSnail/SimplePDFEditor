@@ -439,7 +439,7 @@ public partial class PdfEditorControl : UserControl
         Tool.Text => "Click where the text should start. Enter adds a line; Ctrl+Enter or a click elsewhere finishes; Esc cancels.",
         Tool.Highlight => "Drag across text to highlight it. Dragging over an empty area highlights that area.",
         Tool.Comment => "Click where the comment should go.",
-        _ => "Click to select, drag to move, double-click text or a comment to edit it, Delete to remove.",
+        _ => "Click to select, drag to move, Delete to remove. Double-click a paragraph to rewrite it (it re-flows), or a comment to edit it.",
     };
 
     private TextStyle CurrentTextStyle()
@@ -542,7 +542,10 @@ public partial class PdfEditorControl : UserControl
 
         if (clickCount >= 2)
         {
-            if (hit.Kind == ItemKind.Text) BeginEditingRun(hit);
+            if (hit.Kind == ItemKind.Text)
+            {
+                if (!BeginEditingParagraph(p)) BeginEditingRun(hit);
+            }
             else if (hit.Kind == ItemKind.Annotation) EditAnnotationText(hit.Index);
             return;
         }
@@ -671,11 +674,12 @@ public partial class PdfEditorControl : UserControl
         }, minWidth: info.Bounds.Width);
     }
 
-    private void BeginTyping(double x, double y, string initial, double fontSize, TextStyle style, bool multiline, Action<string> commit, double minWidth = 0)
+    private void BeginTyping(double x, double y, string initial, double fontSize, TextStyle style, bool multiline, Action<string> commit, double minWidth = 0, double wrapWidth = 0)
     {
         DiscardEditor();
         var box = new TextBox
         {
+            TextWrapping = wrapWidth > 0 ? TextWrapping.Wrap : TextWrapping.NoWrap,
             Text = initial,
             AcceptsReturn = multiline,
             FontSize = fontSize * ViewScale,
@@ -689,6 +693,7 @@ public partial class PdfEditorControl : UserControl
             Padding = new Thickness(0),
             MinWidth = Math.Max(60, minWidth * ViewScale + 24),
         };
+        if (wrapWidth > 0) box.Width = wrapWidth * ViewScale + 8;
         // The text box draws its text 3 units inside its edge; shift it so the text sits where it will land.
         Canvas.SetLeft(box, x * ViewScale - 3);
         Canvas.SetTop(box, y * ViewScale - 1);
@@ -708,6 +713,110 @@ public partial class PdfEditorControl : UserControl
         box.Focus();
         box.CaretIndex = box.Text.Length;
         if (initial.Length > 0) box.SelectAll();
+    }
+
+    /// <summary>
+    /// Edits the whole paragraph under a point. When done, the paragraph re-flows: words re-wrap,
+    /// alignment and fonts are kept, and what is below moves if it grows or shrinks.
+    /// Returns false when there is no editable paragraph there.
+    /// </summary>
+    private bool BeginEditingParagraph(Point at)
+    {
+        TextParagraph? paragraph;
+        try { paragraph = Doc.FindParagraphAt(_page, at.X, at.Y); }
+        catch { return false; }
+        if (paragraph is not { IsEditable: true }) return false;
+
+        var main = paragraph.Spans.OrderByDescending(s => s.Length).First();
+        var style = new TextStyle
+        {
+            Font = FamilyOf(main.FontName),
+            Bold = main.Bold,
+            Italic = main.Italic,
+            Color = main.Color,
+        };
+        int page = _page;
+        string original = paragraph.Text;
+        BeginTyping(paragraph.Bounds.X, paragraph.Bounds.Y, original, paragraph.FontSize, style, multiline: true, text =>
+        {
+            text = text.Replace("\r\n", "\n");
+            if (text == original) return;
+            _selection = null;
+            ReflowResult? result = null;
+            if (!Edit(d => result = d.ReplaceParagraphText(page, paragraph.Index, text))) return;
+            ReportReflow(result!);
+        }, minWidth: paragraph.Bounds.Width, wrapWidth: paragraph.Bounds.Width);
+        _editor!.SelectAll();
+        ShowStatus("Editing the paragraph: it re-flows when you finish. Enter starts a new line; Ctrl+Enter or a click elsewhere finishes; Esc cancels.");
+        return true;
+    }
+
+    private void ReportReflow(ReflowResult result)
+    {
+        var notes = new List<string> { $"Paragraph re-flowed onto {result.LineCount} line{(result.LineCount == 1 ? "" : "s")}." };
+        if (result.MovedItems > 0) notes.Add($"{result.MovedItems} item{(result.MovedItems == 1 ? "" : "s")} below moved {(result.HeightChange > 0 ? "down" : "up")}.");
+        if (result.UsedSubstituteFont) notes.Add("Some characters were not in the original font, so a similar font was used for them.");
+        if (result.RunsOffPage) notes.Add("Warning: text now runs past the bottom of the page.");
+        ShowStatus(string.Join(" ", notes));
+    }
+
+    private void ShowStatus(string message) => HintText.Text = message;
+
+    private static StandardFont FamilyOf(string fontName) =>
+        fontName.Contains("Courier", StringComparison.OrdinalIgnoreCase) || fontName.Contains("Mono", StringComparison.OrdinalIgnoreCase) ? StandardFont.Courier
+        : (fontName.Contains("Times", StringComparison.OrdinalIgnoreCase) || fontName.Contains("Serif", StringComparison.OrdinalIgnoreCase))
+          && !fontName.Contains("Sans", StringComparison.OrdinalIgnoreCase) ? StandardFont.Times
+        : StandardFont.Helvetica;
+
+    /// <summary>The paragraph the current selection belongs to.</summary>
+    private TextParagraph? SelectedParagraph()
+    {
+        if (_selection is not { Kind: ItemKind.Text } s) return null;
+        return Doc.FindParagraphAt(_page, s.Bounds.X + s.Bounds.Width / 2, s.Bounds.Y + s.Bounds.Height / 2);
+    }
+
+    private void Align_Click(object sender, RoutedEventArgs e)
+    {
+        CommitEditor();
+        if (sender is not Button { Tag: string name }) return;
+        var paragraph = SelectedParagraph();
+        if (paragraph is null)
+        {
+            ShowStatus("Select some text first (Select tool), then choose an alignment for its paragraph.");
+            return;
+        }
+        if (!paragraph.IsEditable)
+        {
+            ShowStatus("That paragraph cannot be re-flowed (it uses right-to-left script or unknown characters).");
+            return;
+        }
+        int page = _page;
+        _selection = null;
+        ReflowResult? result = null;
+        if (Edit(d => result = d.SetParagraphAlignment(page, paragraph.Index, Enum.Parse<PdfEditor.Core.TextAlignment>(name)))) ReportReflow(result!);
+    }
+
+    private void FindReplace_Click(object sender, RoutedEventArgs e)
+    {
+        CommitEditor();
+        var find = TextPrompt.Show(this, "Find", multiline: false);
+        if (string.IsNullOrEmpty(find)) return;
+        int matches = 0;
+        for (int i = 0; i < Doc.PageCount; i++)
+            foreach (var p in Doc.GetParagraphs(i))
+                for (int at = p.Text.IndexOf(find, StringComparison.OrdinalIgnoreCase); at >= 0; at = p.Text.IndexOf(find, at + find.Length, StringComparison.OrdinalIgnoreCase))
+                    matches++;
+        if (matches == 0)
+        {
+            ShowStatus($"\"{find}\" was not found.");
+            return;
+        }
+        var replacement = TextPrompt.Show(this, $"Replace {matches} \"{find}\" with", multiline: false);
+        if (replacement is null) return;
+        _selection = null;
+        int replaced = 0;
+        if (Edit(d => replaced = d.ReplaceText(find, replacement)))
+            ShowStatus($"Replaced {replaced} occurrence{(replaced == 1 ? "" : "s")}; the paragraphs they were in have re-flowed.");
     }
 
     private static bool IsInToolbar(DependencyObject? element)
@@ -795,6 +904,7 @@ public partial class PdfEditorControl : UserControl
         if (ctrl && e.Key == Key.O) Open_Click(this, e);
         else if (ctrl && e.Key == Key.S) Save(saveAs: shift);
         else if (ctrl && e.Key == Key.N) New_Click(this, e);
+        else if (ctrl && e.Key == Key.H) FindReplace_Click(this, e);
         else if (ctrl && e.Key is Key.OemPlus or Key.Add) ZoomIn_Click(this, e);
         else if (ctrl && e.Key is Key.OemMinus or Key.Subtract) ZoomOut_Click(this, e);
         else if (typing) return; // leave everything else to the text box

@@ -8,6 +8,47 @@ A PDF editor in C# for The Awkward Snail.
 - `src/PdfEditor.App` – the Windows desktop editor (WPF). The whole editor lives in `PdfEditorControl`, so it can be dropped into another WPF window; `MainWindow` is a thin shell around it.
 - `tests/PdfEditor.Core.Tests` – xUnit tests for the engine.
 
+## Editing paragraphs with reflow
+
+A PDF has no paragraphs, only characters placed at positions. `PdfEditor.Core` works the paragraphs out from where the characters sit, and can rewrite one so that its words wrap again, the way a word processor would.
+
+```csharp
+using var doc = PdfDocument.Open("in.pdf");
+
+var paragraph = doc.FindParagraphAt(0, 120, 300);       // or doc.GetParagraphs(0)
+Console.WriteLine($"{paragraph.Alignment}, {paragraph.LineCount} lines: {paragraph.Text}");
+
+doc.ReplaceParagraphText(0, paragraph.Index, "New wording for the whole paragraph...");
+doc.ReplaceInParagraph(0, paragraph.Index, start: 10, length: 5, "words");
+doc.FormatParagraphText(0, paragraph.Index, 0, 4, new TextFormat { Bold = true, Color = new PdfColor(200, 0, 0) });
+doc.SetParagraphAlignment(0, paragraph.Index, TextAlignment.Justify);
+doc.ReplaceText("colour", "color");                     // whole document, every changed paragraph re-flows
+doc.Save("out.pdf");
+```
+
+Paragraph indices are valid until the page changes, so read the paragraphs again after each edit.
+
+**What is kept**
+
+- Position, width, alignment (left, centre, right, justified), first-line indent, list-item hanging indent and line spacing.
+- Formatting of the text that survives an edit: bold or italic words, colours, sizes, superscripts. New text takes the formatting around it.
+- The original embedded fonts. Embedded fonts usually hold only the letters the document already uses; any other letter is drawn in a look-alike font (a standard PDF font of the same family, or an installed font for accents and other scripts), and the result says so.
+- Everything else on the page. When the paragraph grows or shrinks, content below it in the same column (text, images, highlights and comments) moves with it; the other columns and the footer area stay put.
+
+**How paragraphs are found**
+
+Lines are grouped into a paragraph when they share a text size and the page's usual line spacing, line up on the left, centre or right, and when each line was too full to take the next line's first word (a line with room to spare ended on purpose). Hyphenated words split across lines are joined back together.
+
+**Limits**
+
+- Detection is a judgement made from positions. Unusual layouts (tables, text in shapes, multi-column text drawn out of order) may be grouped differently from how they look.
+- A forced line break inside a paragraph is drawn, but the PDF does not record it, so reading the page back gives one paragraph of two lines.
+- Re-written lines use the font's normal letter spacing; fine kerning from the original is not kept for those lines.
+- Text that runs past the bottom of the page is reported (`RunsOffPage`), not moved to the next page.
+- Right-to-left scripts, vertical text and text inside form XObjects are not re-flowed.
+
+**Keeping the rest of the page intact.** When an existing object changes, PDFium rewrites the page's original content and drops word and character spacing on the way, which would shift justified text elsewhere on the page. Before that happens, any text that depends on those settings is redrawn with each character pinned where it was. This also protects the editor's move, resize, delete and edit-text operations.
+
 ## Running the editor (Windows)
 
 Needs the .NET 8 SDK (or Visual Studio 2022 with the ".NET desktop development" workload).
@@ -22,11 +63,13 @@ or open `PdfEditor.sln` in Visual Studio and run `PdfEditor.App`. A PDF path on 
 
 | Tool | What it does |
 |---|---|
-| **Select** | Click an item to select it, drag to move text or images, drag an image's corner handle to resize it, double-click text to edit it, double-click a comment to change it, Delete to remove. |
+| **Select** | Click an item to select it, drag to move text or images, drag an image's corner handle to resize it, Delete to remove. Double-click a paragraph to rewrite it: when you finish, it re-flows. Double-click a comment to change it. With text selected, the Paragraph buttons set its alignment. |
 | **Text** | Click where new text should start and type. Enter adds a line; Ctrl+Enter or clicking elsewhere finishes; Esc cancels. Font, size, bold, italic and colour come from the toolbar. |
 | **Highlight** | Drag across text to highlight it in the chosen colour. Dragging over an empty area highlights that area. |
 | **Comment** | Click where the comment should go and type it. Comments and highlights are listed on the right. |
 | **Image** | Pick an image file; it is placed in the middle of the page, ready to drag and resize. |
+
+**Find & replace** (Ctrl+H) replaces text throughout the document and re-flows each paragraph it changes.
 
 Page buttons add a blank page, insert another PDF's pages, delete, rotate and reorder the current page. Undo/redo (Ctrl+Z / Ctrl+Y) covers every change. Ctrl+mouse wheel zooms.
 
@@ -67,3 +110,7 @@ dotnet test tests/PdfEditor.Core.Tests
 ```
 
 The engine tests run on Windows, Linux and macOS. The app itself only runs on Windows.
+
+The reflow tests read PDFs in `tests/PdfEditor.Core.Tests/Fixtures`, made by `make_fixtures.py` there (python-docx, reportlab and LibreOffice): a Word-style document exported by LibreOffice with subset-embedded fonts, and a two-column document justified with word spacing.
+
+PDFium is not thread-safe, even across separate documents: use the library from one thread at a time.

@@ -30,5 +30,10 @@ internal readonly record struct Affine(double A, double B, double C, double D, d
         return new PdfRect(minX, minY, maxX - minX, maxY - minY);
     }
 
+    /// <summary>The same transform without its translation.</summary>
+    public Affine WithoutTranslation() => this with { E = 0, F = 0 };
+
+    public static readonly Affine Identity = new(1, 0, 0, 1, 0, 0);
+
     public Native.FS_MATRIX ToNative() => new() { a = (float)A, b = (float)B, c = (float)C, d = (float)D, e = (float)E, f = (float)F };
 }

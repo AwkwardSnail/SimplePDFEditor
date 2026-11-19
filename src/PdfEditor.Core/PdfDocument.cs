@@ -93,13 +93,15 @@ public sealed unsafe partial class PdfDocument : IDisposable
     {
         if (_doc == IntPtr.Zero) return;
         foreach (var font in _fonts.Values) Native.FPDFFont_Close(font);
+        foreach (var font in _standardFonts.Values) Native.FPDFFont_Close(font);
         _fonts.Clear();
+        _standardFonts.Clear();
         Native.FPDF_CloseDocument(_doc);
         _doc = IntPtr.Zero;
         if (_sourcePin.IsAllocated) _sourcePin.Free();
     }
 
-    private IntPtr Doc => _doc != IntPtr.Zero ? _doc : throw new ObjectDisposedException(nameof(PdfDocument));
+    internal IntPtr Doc => _doc != IntPtr.Zero ? _doc : throw new ObjectDisposedException(nameof(PdfDocument));
 
     // ------------------------------------------------------------------ pages
 
@@ -197,16 +199,16 @@ public sealed unsafe partial class PdfDocument : IDisposable
             throw new ArgumentOutOfRangeException(nameof(pageIndex), $"Page index {pageIndex} is outside 0..{PageCount - 1}.");
     }
 
-    private PageHandle OpenPage(int pageIndex)
+    internal PageHandle OpenPage(int pageIndex)
     {
         CheckPage(pageIndex);
         var handle = Native.FPDF_LoadPage(Doc, pageIndex);
         if (handle == IntPtr.Zero) throw new PdfException($"Could not load page {pageIndex + 1}.");
-        return new PageHandle(handle);
+        return new PageHandle(handle, this);
     }
 
     /// <summary>A loaded page plus the mapping between view space and the PDF's own user space.</summary>
-    private sealed class PageHandle : IDisposable
+    internal sealed class PageHandle : IDisposable
     {
         public IntPtr Handle { get; }
         public double Width { get; }
@@ -215,10 +217,17 @@ public sealed unsafe partial class PdfDocument : IDisposable
         public Affine UserToView { get; }
         /// <summary>Set when page objects changed and the content stream must be regenerated.</summary>
         public bool Dirty { get; set; }
+        /// <summary>
+        /// Set when an object that was already on the page changed or went away. PDFium then
+        /// rewrites the page's original content, so other text needs protecting (see PreserveTextLayout).
+        /// </summary>
+        public bool ChangedExisting { get; set; }
+        private readonly PdfDocument _owner;
 
-        public PageHandle(IntPtr handle)
+        public PageHandle(IntPtr handle, PdfDocument owner)
         {
             Handle = handle;
+            _owner = owner;
             Width = Native.FPDF_GetPageWidthF(handle);
             Height = Native.FPDF_GetPageHeightF(handle);
 
@@ -236,7 +245,11 @@ public sealed unsafe partial class PdfDocument : IDisposable
 
         public void Dispose()
         {
-            if (Dirty) Native.FPDFPage_GenerateContent(Handle);
+            if (Dirty)
+            {
+                if (ChangedExisting) _owner.PreserveTextLayout(this);
+                Native.FPDFPage_GenerateContent(Handle);
+            }
             Native.FPDF_ClosePage(Handle);
         }
     }
