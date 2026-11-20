@@ -1003,8 +1003,10 @@ public class PdfDocumentTests
 
     private static int DarkPixels(RenderedPage r) { int n = 0; for (int i = 0; i < r.Pixels.Length; i += 4) if (r.Pixels[i] < 128) n++; return n; }
 
-    [Fact]
-    public void Type3_text_is_kept_as_pictures_when_its_page_is_rewritten()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Type3_text_survives_a_change_to_its_page(bool direct) => WithDirectEdits(direct, () =>
     {
         using var doc = PdfDocument.Open(PdfWithType3Letters());
         var report = doc.FindLooseText();
@@ -1013,15 +1015,17 @@ public class PdfDocumentTests
         var before = doc.Render(0, 1, false);
         Assert.True(DarkPixels(before) > 600);
 
-        // Moving one letter makes PDFium write the page again, and it cannot write Type 3 text.
+        // Moved in the page's instructions, the letters stay Type 3 text. The older way PDFium writes the
+        // page again, and it cannot write Type 3 text: each letter is then kept as a picture of itself.
         doc.MoveObject(0, doc.GetTextRuns(0)[0].ObjectIndex, 0, 40);
         using var saved = PdfDocument.Open(doc.ToBytes());
         var after = saved.Render(0, 1, false);
         Assert.InRange(DarkPixels(after), DarkPixels(before) * 0.9, DarkPixels(before) * 1.1); // every letter still shows
-        Assert.Equal(8, saved.GetImages(0).Count);
+        Assert.Equal(direct ? 0 : 8, saved.GetImages(0).Count);
+        Assert.Equal(direct ? 8 : 0, saved.GetTextRuns(0).Count);
         Assert.True(PixelsThatDiffer(before, after, new PdfRect(60, 60, 200, 60)) < 60, "the letters that were not moved look as they did");
         Assert.True(PixelsThatDiffer(before, after, new PdfRect(48, 105, 14, 30)) > 50, "the moved letter is 40 points lower");
-    }
+    });
 
     [Fact]
     public void Loose_letters_in_a_Type3_font_become_lines_of_ordinary_text()

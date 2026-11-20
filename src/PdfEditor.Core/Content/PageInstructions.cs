@@ -18,7 +18,25 @@ internal enum ItemKind { Text = 1, Path = 2, Image = 3, Shading = 4, Group = 5 }
 /// <param name="Space">The coordinate space in force when it is painted: from that space to the page's own.</param>
 /// <param name="ClipsToo">The path is also used to clip what follows, so it cannot simply be taken out or boxed in.</param>
 /// <param name="Clip">What the item is clipped to where it is drawn.</param>
-internal sealed record DrawnItem(ItemKind Kind, int Start, int End, string Operator, int OperatorAt, Affine Space, bool ClipsToo, Clip Clip);
+internal sealed record DrawnItem(ItemKind Kind, int Start, int End, string Operator, int OperatorAt, Affine Space, bool ClipsToo, Clip Clip)
+{
+    /// <summary>For a piece of text: the state of the text machinery where it is shown.</summary>
+    public TextState? Text { get; init; }
+}
+
+/// <summary>
+/// What a piece of text depends on besides its own instruction. Pieces of text in one block share
+/// a writing position: each starts where the one before left off unless the position is set anew.
+/// </summary>
+/// <param name="LineStart">The start of the current line (the "line matrix"): what moves to a new line are measured from.</param>
+/// <param name="FontSize">The size the font is set at.</param>
+/// <param name="Stretch">Horizontal stretching, 1 for none.</param>
+/// <param name="Rise">How far the text is raised above its line.</param>
+/// <param name="Mode">How the text is drawn; 4 and above also clip what follows.</param>
+/// <param name="StringAt">Where the text itself starts among the instruction's operands.</param>
+/// <param name="NextFollowsOn">The next piece of text starts where this one ends, with nothing setting the position in between.</param>
+/// <param name="ShiftBeforeNext">How far instructions between this piece and the next shift the writing position along the line.</param>
+internal sealed record TextState(Affine LineStart, double FontSize, double Stretch, double Rise, int Mode, int StringAt, bool NextFollowsOn = false, double ShiftBeforeNext = 0);
 
 /// <summary>
 /// The clip in force at some point of a page's instructions: nothing (no box, not complex), an
@@ -163,12 +181,18 @@ internal sealed class PageInstructions
         // Numbers waiting for their operator, and the coordinate space (with those saved by "q").
         private readonly List<double> _numbers = [];
         private Affine _space = Affine.Identity;
-        private readonly Stack<(Affine Space, Clip Clip)> _saved = new();
+        private readonly Stack<(Affine Space, Clip Clip, double FontSize, double Stretch, double Rise, double Leading, int TextMode)> _saved = new();
         // The clip in force; whether the path being built is one plain rectangle (and which); text that clips.
         private Clip _clip;
         private bool _onlyARectangle, _textClips;
         private int _pathSteps, _textMode;
         private readonly double[] _rectangle = new double[4];
+        // Text: the start of the line, the font's size, stretch, rise and line spacing; and the last piece shown,
+        // while nothing has set the position anew since.
+        private Affine _lineStart = Affine.Identity;
+        private double _fontSize, _stretch = 1, _rise, _leading, _shift;
+        private int _lastShown = -1, _stringAt = -1;
+        private double _arraySum; // the numbers of the array just read, added up
 
         private static bool IsSpace(byte b) => b is 0 or 9 or 10 or 12 or 13 or 32;
         private static bool IsDelimiter(byte b) => b is (byte)'(' or (byte)')' or (byte)'<' or (byte)'>' or (byte)'[' or (byte)']' or (byte)'{' or (byte)'}' or (byte)'/' or (byte)'%';
@@ -182,10 +206,10 @@ internal sealed class PageInstructions
                 int start = _p;
                 byte b = d[_p];
                 if (b == '/') { Operand(start); _p++; int s = _p; while (_p < d.Length && !IsSpace(d[_p]) && !IsDelimiter(d[_p])) _p++; _lastName = Name(s, _p); }
-                else if (b == '(') { Operand(start); _lastStringEmpty = Literal(); }
+                else if (b == '(') { Operand(start); _stringAt = start; _lastStringEmpty = Literal(); }
                 else if (b == '<' && _p + 1 < d.Length && d[_p + 1] == '<') { Operand(start); Dictionary(); }
-                else if (b == '<') { Operand(start); _lastStringEmpty = Hex(); }
-                else if (b == '[') { Operand(start); Array(); }
+                else if (b == '<') { Operand(start); _stringAt = start; _lastStringEmpty = Hex(); }
+                else if (b == '[') { Operand(start); _stringAt = start; Array(); }
                 else if (b == ']' || b == '>' || b == ')' || b == '{' || b == '}') _p++; // stray: PDFium steps over these too
                 else
                 {
@@ -266,6 +290,7 @@ internal sealed class PageInstructions
         {
             _p++;
             _arrayHasText = false;
+            _arraySum = 0;
             while (true)
             {
                 SkipSpace();
@@ -275,9 +300,15 @@ internal sealed class PageInstructions
                 if (b == '(') { if (!Literal()) _arrayHasText = true; }
                 else if (b == '<' && _p + 1 < d.Length && d[_p + 1] == '<') Dictionary();
                 else if (b == '<') { if (!Hex()) _arrayHasText = true; }
-                else if (b == '[') { bool outer = _arrayHasText; Array(); _arrayHasText = outer; }
+                else if (b == '[') { bool outer = _arrayHasText; double sum = _arraySum; Array(); (_arrayHasText, _arraySum) = (outer, sum); }
                 else if (b == '/') { _p++; while (_p < d.Length && !IsSpace(d[_p]) && !IsDelimiter(d[_p])) _p++; }
-                else { int s = _p; while (_p < d.Length && !IsSpace(d[_p]) && !IsDelimiter(d[_p])) _p++; if (_p == s) _p++; }
+                else
+                {
+                    int s = _p;
+                    while (_p < d.Length && !IsSpace(d[_p]) && !IsDelimiter(d[_p])) _p++;
+                    if (_p == s) _p++;
+                    else if (double.TryParse(Encoding.ASCII.GetString(d, s, _p - s), NumberStyles.Float, CultureInfo.InvariantCulture, out double number)) _arraySum += number;
+                }
             }
         }
 
@@ -302,6 +333,29 @@ internal sealed class PageInstructions
         private void Add(ItemKind kind, int start, string op, int operatorAt, bool clipsToo = false) =>
             _items.Add(new DrawnItem(kind, start, _p, op, operatorAt, _space, clipsToo, _clip));
 
+        /// <summary>A piece of text is shown. The one before it, if nothing set the position since, is noted as followed on.</summary>
+        private void Show(int start, string op, int operatorAt)
+        {
+            if (_lastShown >= 0)
+            {
+                var before = _items[_lastShown];
+                _items[_lastShown] = before with { Text = before.Text! with { NextFollowsOn = true, ShiftBeforeNext = _shift } };
+            }
+            _items.Add(new DrawnItem(ItemKind.Text, start, _p, op, operatorAt, _space, false, _clip)
+            {
+                Text = new TextState(_lineStart, _fontSize, _stretch, _rise, _textMode, _stringAt >= start ? _stringAt : start),
+            });
+            _lastShown = _items.Count - 1;
+            _shift = 0;
+            if (_textMode >= 4) _textClips = true;
+        }
+
+        private void NewLine(double x, double y)
+        {
+            _lineStart = Affine.Concat(new Affine(1, 0, 0, 1, x, y), _lineStart);
+            _lastShown = -1;
+        }
+
         /// <summary>The path just finished becomes part of the clip, for everything up to the matching "Q".</summary>
         private void ClipToPath()
         {
@@ -322,8 +376,9 @@ internal sealed class PageInstructions
             switch (op)
             {
                 // ---- the coordinate space
-                case "q": _saved.Push((_space, _clip)); break;
-                case "Q": if (_saved.Count > 0) (_space, _clip) = _saved.Pop(); break;
+                // "q" saves the whole drawing state, the text settings among it; "Q" brings it back.
+                case "q": _saved.Push((_space, _clip, _fontSize, _stretch, _rise, _leading, _textMode)); break;
+                case "Q": if (_saved.Count > 0) (_space, _clip, _fontSize, _stretch, _rise, _leading, _textMode) = _saved.Pop(); break;
                 case "cm":
                     if (_numbers.Count >= 6)
                     {
@@ -371,12 +426,41 @@ internal sealed class PageInstructions
                 }
 
                 // ---- text
-                case "Tj" or "'" or "\"":
-                    if (!_lastStringEmpty) { Add(ItemKind.Text, start, op, at); if (_textMode >= 4) _textClips = true; }
+                case "Tj":
+                    if (!_lastStringEmpty) Show(start, op, at);
+                    break;
+                case "'" or "\"":
+                    NewLine(0, -_leading); // these move to the next line first, then show
+                    if (!_lastStringEmpty) Show(start, op, at);
                     break;
                 case "TJ":
-                    if (_arrayHasText) { Add(ItemKind.Text, start, op, at); if (_textMode >= 4) _textClips = true; }
+                    if (_arrayHasText) Show(start, op, at);
+                    else _shift += -_arraySum / 1000 * _fontSize * _stretch; // numbers alone only shift the position
                     break;
+                case "BT":
+                    _lineStart = Affine.Identity;
+                    (_lastShown, _shift) = (-1, 0);
+                    break;
+                case "Td" or "TD":
+                    if (_numbers.Count >= 2)
+                    {
+                        if (op == "TD") _leading = -_numbers[^1];
+                        NewLine(_numbers[^2], _numbers[^1]);
+                    }
+                    break;
+                case "T*": NewLine(0, -_leading); break;
+                case "Tm":
+                    if (_numbers.Count >= 6)
+                    {
+                        int n = _numbers.Count;
+                        _lineStart = new Affine(_numbers[n - 6], _numbers[n - 5], _numbers[n - 4], _numbers[n - 3], _numbers[n - 2], _numbers[n - 1]);
+                        _lastShown = -1;
+                    }
+                    break;
+                case "Tf": if (_numbers.Count >= 1) _fontSize = _numbers[^1]; break;
+                case "Tz": if (_numbers.Count >= 1) _stretch = _numbers[^1] / 100; break;
+                case "Ts": if (_numbers.Count >= 1) _rise = _numbers[^1]; break;
+                case "TL": if (_numbers.Count >= 1) _leading = _numbers[^1]; break;
                 case "Tr":
                     if (_numbers.Count >= 1) _textMode = (int)_numbers[^1];
                     break;
@@ -384,6 +468,7 @@ internal sealed class PageInstructions
                     // Text drawn in a clipping mode becomes part of the clip when its block ends.
                     if (_textClips) _clip = _clip with { Complex = true };
                     _textClips = false;
+                    _lastShown = -1;
                     break;
 
                 // ---- pictures, groups, gradients

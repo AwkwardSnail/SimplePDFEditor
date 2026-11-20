@@ -1,4 +1,4 @@
-﻿using PdfEditor.Core.Interop;
+using PdfEditor.Core.Interop;
 using PdfEditor.Core.Reflow;
 
 namespace PdfEditor.Core;
@@ -94,9 +94,21 @@ public sealed unsafe partial class PdfDocument
     /// </summary>
     public void RotateObjects(int pageIndex, IEnumerable<int> objectIndices, bool clockwise)
     {
+        var indices = objectIndices.Distinct().ToList();
+        if (indices.Count == 0) return;
+        Affine turnInPage;
+        using (var measure = OpenPage(pageIndex)) turnInPage = QuarterTurn(measure, indices.Select(i => GetObject(measure, i)).ToList(), clockwise);
+        if (TryEditInstructions(pageIndex, indices, _ => turnInPage)) return;
+
         using var page = OpenPage(pageIndex);
-        var objects = objectIndices.Distinct().Select(i => GetObject(page, i)).ToList();
-        if (objects.Count == 0) return;
+        var objects = indices.Select(i => GetObject(page, i)).ToList();
+        foreach (var obj in objects) TransformObject(obj, turnInPage);
+        page.Dirty = page.ChangedExisting = true;
+    }
+
+    /// <summary>A quarter turn about the middle of the area the objects cover together, in the page's own coordinates.</summary>
+    private static Affine QuarterTurn(PageHandle page, List<IntPtr> objects, bool clockwise)
+    {
         double left = double.MaxValue, top = double.MaxValue, right = double.MinValue, bottom = double.MinValue;
         foreach (var obj in objects)
         {
@@ -106,8 +118,6 @@ public sealed unsafe partial class PdfDocument
         double cx = (left + right) / 2, cy = (top + bottom) / 2;
         // As seen (y runs down the page): clockwise takes (x, y) about the middle to (-y, x).
         var turn = clockwise ? new Affine(0, 1, -1, 0, cx + cy, cy - cx) : new Affine(0, -1, 1, 0, cx - cy, cy + cx);
-        var inUserSpace = Affine.Concat(Affine.Concat(page.UserToView, turn), page.ViewToUser);
-        foreach (var obj in objects) TransformObject(obj, inUserSpace);
-        page.Dirty = page.ChangedExisting = true;
+        return Affine.Concat(Affine.Concat(page.UserToView, turn), page.ViewToUser);
     }
 }

@@ -198,7 +198,7 @@ public unsafe class PageInstructionsTests
     }
 
     [Fact]
-    public void Pictures_and_groups_are_moved_and_removed_directly_and_text_still_goes_the_older_way()
+    public void Pictures_groups_and_text_are_moved_and_removed_directly()
     {
         byte[] pdf = Page("q 60 0 0 60 40 40 cm /Im Do Q q 1 0 0 1 150 150 cm /Fm Do Q BT /F1 20 Tf 40 250 Td (Some text) Tj ET",
             "/XObject<</Im 5 0 R/Fm 6 0 R>>" + Font,
@@ -215,7 +215,7 @@ public unsafe class PageInstructionsTests
         var run = doc.GetTextRuns(0).Single();
         doc.MoveObject(0, run.ObjectIndex, 5, 5);
         Assert.Equal(run.Bounds.X + 5, doc.GetTextRuns(0).Single().Bounds.X, 0.05);
-        Assert.Equal(rewritten + 1, PdfDocument.RewrittenEdits); // text is not yet edited directly
+        Assert.Equal((direct + 2, rewritten), (PdfDocument.DirectEdits, PdfDocument.RewrittenEdits)); // text too
 
         doc.RemoveObject(0, doc.GetImages(0).Single().ObjectIndex);
         Assert.Empty(doc.GetImages(0));
@@ -236,5 +236,124 @@ public unsafe class PageInstructionsTests
         var page = again.Render(0, 1, false);
         int i = (300 - 70) * page.Stride + 170 * 4;
         Assert.Equal((255, 0, 0), (page.Pixels[i + 2], page.Pixels[i + 1], page.Pixels[i])); // still seen, at its new place
+    }
+    // ------------------------------------------------------------------ text, where pieces share a writing position
+
+    public static IEnumerable<object[]> TextBlocks() =>
+    [
+        ["pieces one after another", "BT /F1 12 Tf 30 200 Td (first ) Tj (second ) Tj (third ) Tj (fourth) Tj ET"],
+        ["with spacing between letters and words", "BT /F1 12 Tf 2 Tc 5 Tw 30 200 Td (one two ) Tj (three four ) Tj (five) Tj ET"],
+        ["kerned pieces", "BT /F1 12 Tf 30 200 Td [(ab) -300 (cd)] TJ [(ef) 250 (gh)] TJ (ij) Tj ET"],
+        ["a shift between pieces", "BT /F1 12 Tf 30 200 Td (ab) Tj [-2000] TJ (cd) Tj [500] TJ (ef) Tj ET"],
+        ["lines made with Td", "BT /F1 12 Tf 30 200 Td (line one) Tj 0 -16 Td (line two) Tj (more) Tj 0 -16 Td (line three) Tj ET"],
+        ["lines made with leading", "BT /F1 12 Tf 15 TL 30 200 Td (line one) Tj T* (line two) Tj (more) Tj (line three) ' (tail) Tj (line four) ' ET"],
+        ["the double quote", "BT /F1 12 Tf 15 TL 30 200 Td (one) Tj 3 1 (two words) \" (after) Tj T* (three words here) Tj ET"],
+        ["stretched", "BT /F1 12 Tf 150 Tz 30 200 Td (wide ) Tj (text ) Tj (here) Tj ET"],
+        ["raised", "BT /F1 12 Tf 30 200 Td (base ) Tj 5 Ts (up ) Tj 0 Ts (down ) Tj (end) Tj ET"],
+        ["a change of size in the line", "BT /F1 12 Tf 30 200 Td (small ) Tj /F1 20 Tf (big ) Tj /F1 12 Tf (small) Tj ET"],
+        ["in a scaled and turned space", "q 1.5 0 0 1.5 10 20 cm q 0.966 0.259 -0.259 0.966 20 0 cm BT /F1 10 Tf 20 60 Td (one ) Tj (two ) Tj (three) Tj ET Q Q"],
+        ["set with a turned text matrix", "BT /F1 12 Tf 0 1 -1 0 150 60 Tm (up ) Tj (the ) Tj (page) Tj 0 -16 Td (next) Tj ET"],
+        ["two blocks", "BT /F1 12 Tf 30 200 Td (a ) Tj (b) Tj ET BT /F1 12 Tf 30 150 Td (c ) Tj (d) Tj ET"],
+    ];
+
+    private static byte[] TextPage(string content) => Page(content, "/Font<</F1<</Type/Font/Subtype/Type1/BaseFont/Courier>>>>");
+
+    /// <summary>Each piece of text on the page: what it says and exactly where it is.</summary>
+    private static List<(string Text, PdfRect Bounds)> Pieces(PdfDocument doc) =>
+        doc.GetTextRuns(0).Select(r => (r.Text, r.Bounds)).ToList();
+
+    private static void AssertSamePlace((string Text, PdfRect Bounds) expected, (string Text, PdfRect Bounds) actual, string because)
+    {
+        Assert.Equal(expected.Text.Trim(), actual.Text.Trim()); // PDFium adds a space or a line end after a piece depending on what follows it
+        Assert.True(Math.Abs(expected.Bounds.X - actual.Bounds.X) < 0.02 && Math.Abs(expected.Bounds.Y - actual.Bounds.Y) < 0.02 &&
+                    Math.Abs(expected.Bounds.Width - actual.Bounds.Width) < 0.02 && Math.Abs(expected.Bounds.Height - actual.Bounds.Height) < 0.02,
+            $"{because}: '{expected.Text}' was at {expected.Bounds}, is at {actual.Bounds}");
+    }
+
+    [Theory]
+    [MemberData(nameof(TextBlocks))]
+    public void Removing_any_piece_of_text_leaves_the_others_exactly_where_they_were(string what, string content)
+    {
+        byte[] pdf = TextPage(content);
+        int count;
+        using (var first = PdfDocument.Open(pdf)) count = first.GetTextRuns(0).Count;
+        Assert.True(count >= 3, what);
+        for (int victim = 0; victim < count; victim++)
+        {
+            using var doc = PdfDocument.Open(pdf);
+            var before = Pieces(doc);
+            int direct = PdfDocument.DirectEdits;
+            doc.RemoveObject(0, doc.GetTextRuns(0)[victim].ObjectIndex);
+            Assert.True(PdfDocument.DirectEdits == direct + 1, $"{what}: removing piece {victim} did not go the direct way");
+            using var saved = PdfDocument.Open(doc.ToBytes());
+            var after = Pieces(saved);
+            Assert.Equal(count - 1, after.Count);
+            before.RemoveAt(victim);
+            for (int i = 0; i < after.Count; i++) AssertSamePlace(before[i], after[i], $"{what}, after removing piece {victim}");
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(TextBlocks))]
+    public void Moving_any_piece_of_text_moves_only_that_piece(string what, string content)
+    {
+        byte[] pdf = TextPage(content);
+        int count;
+        using (var first = PdfDocument.Open(pdf)) count = first.GetTextRuns(0).Count;
+        for (int moved = 0; moved < count; moved++)
+        {
+            using var doc = PdfDocument.Open(pdf);
+            var before = Pieces(doc);
+            int direct = PdfDocument.DirectEdits;
+            doc.MoveObject(0, doc.GetTextRuns(0)[moved].ObjectIndex, 7, -5);
+            Assert.True(PdfDocument.DirectEdits == direct + 1, $"{what}: moving piece {moved} did not go the direct way");
+            using var saved = PdfDocument.Open(doc.ToBytes());
+            var after = Pieces(saved);
+            Assert.Equal(count, after.Count);
+            for (int i = 0; i < count; i++)
+            {
+                var expected = i == moved
+                    ? (before[i].Text, new PdfRect(before[i].Bounds.X + 7, before[i].Bounds.Y - 5, before[i].Bounds.Width, before[i].Bounds.Height))
+                    : before[i];
+                AssertSamePlace(expected, after[i], $"{what}, after moving piece {moved}");
+            }
+        }
+    }
+
+    [Fact]
+    public void A_block_of_lines_moves_and_turns_together_and_several_pieces_can_go_at_once()
+    {
+        byte[] pdf = TextPage("BT /F1 12 Tf 15 TL 60 220 Td (line one ) Tj (more) Tj T* (line two) Tj (line three) ' ET BT /F1 12 Tf 60 100 Td (apart) Tj ET");
+        using var doc = PdfDocument.Open(pdf);
+        var before = Pieces(doc);
+        var block = doc.GetTextRuns(0).Take(4).Select(r => r.ObjectIndex).ToList();
+        int direct = PdfDocument.DirectEdits;
+
+        doc.MoveObjects(0, block, 20, 30);
+        var moved = Pieces(doc);
+        for (int i = 0; i < 4; i++) AssertSamePlace((before[i].Text, new PdfRect(before[i].Bounds.X + 20, before[i].Bounds.Y + 30, before[i].Bounds.Width, before[i].Bounds.Height)), moved[i], "the block moved");
+        AssertSamePlace(before[4], moved[4], "the piece apart");
+
+        // A quarter turn about the block's middle: its width and height change places, its middle stays.
+        PdfRect Around(List<(string Text, PdfRect Bounds)> p) => new(p.Take(4).Min(x => x.Bounds.X), p.Take(4).Min(x => x.Bounds.Y),
+            p.Take(4).Max(x => x.Bounds.Right) - p.Take(4).Min(x => x.Bounds.X), p.Take(4).Max(x => x.Bounds.Bottom) - p.Take(4).Min(x => x.Bounds.Y));
+        var was = Around(moved);
+        doc.RotateObjects(0, doc.GetTextRuns(0).Take(4).Select(r => r.ObjectIndex), clockwise: true);
+        var turned = Pieces(doc);
+        var now = Around(turned);
+        Assert.Equal(was.Width, now.Height, 0.05);
+        Assert.Equal(was.Height, now.Width, 0.05);
+        Assert.Equal(was.X + was.Width / 2, now.X + now.Width / 2, 0.05);
+        AssertSamePlace(before[4], turned[4], "the piece apart");
+
+        // Two neighbouring pieces removed in one go: the rest stay.
+        doc.RemoveObjects(0, doc.GetTextRuns(0).Take(2).Select(r => r.ObjectIndex));
+        var left = Pieces(doc);
+        Assert.Equal(3, left.Count);
+        AssertSamePlace(turned[2], left[0], "after removing two");
+        AssertSamePlace(turned[3], left[1], "after removing two");
+        Assert.Equal(direct + 3, PdfDocument.DirectEdits);
+        using var saved = PdfDocument.Open(doc.ToBytes());
+        Assert.Equal(["line two", "line three", "apart"], saved.GetTextRuns(0).Select(r => r.Text.Trim()).ToArray());
     }
 }

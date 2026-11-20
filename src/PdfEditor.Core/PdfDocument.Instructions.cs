@@ -44,6 +44,7 @@ public sealed unsafe partial class PdfDocument
 
             // The items must be PDFium's objects, one for one; and an item that is clipped must stay inside its clip.
             var changes = new List<InstructionEdits.Change>();
+            var placed = new Dictionary<int, Affine>(); // where PDFium has each piece of text concerned, and the piece after it
             using (var page = OpenPage(pageIndex))
             {
                 int count = Native.FPDFPage_CountObjects(page.Handle);
@@ -64,9 +65,16 @@ public sealed unsafe partial class PdfDocument
                         if (!read.Items[index].Clip.LeavesWhole(moved.X, moved.Y, moved.Right, moved.Bottom)) { RewrittenEdits++; return false; }
                     }
                     changes.Add(new InstructionEdits.Change(index, transform));
+                    if (read.Items[index].Kind != Content.ItemKind.Text) continue;
+                    foreach (int textIndex in new[] { index, index + 1 })
+                    {
+                        if (textIndex >= count || read.Items[textIndex].Kind != Content.ItemKind.Text) continue;
+                        Native.FS_MATRIX m;
+                        if (Native.FPDFPageObj_GetMatrix(Native.FPDFPage_GetObject(page.Handle, textIndex), &m) != 0) placed[textIndex] = new Affine(m.a, m.b, m.c, m.d, m.e, m.f);
+                    }
                 }
             }
-            byte[]? data = InstructionEdits.Apply(read, changes);
+            byte[]? data = InstructionEdits.Apply(read, changes, i => placed.TryGetValue(i, out var where) ? where : null);
             if (data is null) { RewrittenEdits++; return false; }
 
             // The page's content becomes one stream, in place of its first; the page points at that alone.
