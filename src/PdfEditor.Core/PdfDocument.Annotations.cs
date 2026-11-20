@@ -129,6 +129,37 @@ public sealed unsafe partial class PdfDocument
         finally { Native.FPDFPage_CloseAnnot(annot); }
     }
 
+    /// <summary>Moves a comment, highlight or other annotation by an offset in view space (points, y downwards).</summary>
+    public void MoveAnnotation(int pageIndex, int annotationIndex, double dx, double dy)
+    {
+        using var page = OpenPage(pageIndex);
+        if (annotationIndex < 0 || annotationIndex >= Native.FPDFPage_GetAnnotCount(page.Handle)) throw new ArgumentOutOfRangeException(nameof(annotationIndex));
+        var annot = Native.FPDFPage_GetAnnot(page.Handle, annotationIndex);
+        if (annot == IntPtr.Zero) throw new PdfException("Could not move the annotation.");
+        try
+        {
+            // The offset in the page's own coordinates (the page may be turned).
+            var v = page.ViewToUser;
+            float ux = (float)(v.A * dx + v.C * dy), uy = (float)(v.B * dx + v.D * dy);
+            int quads = (int)Native.FPDFAnnot_CountAttachmentPoints(annot);
+            for (int q = 0; q < quads; q++)
+            {
+                Native.FS_QUADPOINTSF quad;
+                if (Native.FPDFAnnot_GetAttachmentPoints(annot, (nuint)q, &quad) == 0) continue;
+                quad.x1 += ux; quad.x2 += ux; quad.x3 += ux; quad.x4 += ux;
+                quad.y1 += uy; quad.y2 += uy; quad.y3 += uy; quad.y4 += uy;
+                Native.FPDFAnnot_SetAttachmentPoints(annot, (nuint)q, &quad);
+            }
+            Native.FS_RECTF rect;
+            if (Native.FPDFAnnot_GetRect(annot, &rect) == 0) throw new PdfException("Could not move the annotation.");
+            rect.left += ux; rect.right += ux;
+            rect.top += uy; rect.bottom += uy;
+            Native.FPDFAnnot_SetRect(annot, &rect);
+            Native.FPDFAnnot_SetStringValue(annot, "M", PdfDate(DateTimeOffset.Now));
+        }
+        finally { Native.FPDFPage_CloseAnnot(annot); }
+    }
+
     public void RemoveAnnotation(int pageIndex, int annotationIndex)
     {
         using var page = OpenPage(pageIndex);

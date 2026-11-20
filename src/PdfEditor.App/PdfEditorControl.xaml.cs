@@ -439,14 +439,18 @@ public partial class PdfEditorControl : UserControl
     {
         DiscardEditor();
         _selection = null;
+        if (!_session.CanUndo) return;
         _session.Undo();
+        ShowStatus("Undone. Redo brings the change back.");
     }
 
     private void Redo_Click(object sender, RoutedEventArgs e)
     {
         DiscardEditor();
         _selection = null;
+        if (!_session.CanRedo) return;
         _session.Redo();
+        ShowStatus("Redone.");
     }
 
     private void AddPage_Click(object sender, RoutedEventArgs e)
@@ -824,7 +828,7 @@ public partial class PdfEditorControl : UserControl
             else if (hit.Kind == ItemKind.Annotation) EditAnnotationText(hit.Index);
             return;
         }
-        if (hit.Kind != ItemKind.Annotation) StartDrag(Drag.Move, p, hit.Bounds);
+        StartDrag(Drag.Move, p, hit.Bounds);
     }
 
     private void StartDrag(Drag drag, Point p, PdfRect bounds)
@@ -992,7 +996,8 @@ public partial class PdfEditorControl : UserControl
         double dx = target.X - s.Bounds.X, dy = target.Y - s.Bounds.Y;
         if (drag == Drag.Move && (Math.Abs(dx) > 0.5 || Math.Abs(dy) > 0.5))
         {
-            if (s.Group is { } shapes) Edit(d => d.MoveObjects(page, shapes, dx, dy));
+            if (s.Kind == ItemKind.Annotation) Edit(d => d.MoveAnnotation(page, s.Index, dx, dy));
+            else if (s.Group is { } shapes) Edit(d => d.MoveObjects(page, shapes, dx, dy));
             else Edit(d => d.MoveObject(page, s.Index, dx, dy));
         }
         else if (drag == Drag.Resize && Math.Abs(target.Width - s.Bounds.Width) > 0.5)
@@ -1135,7 +1140,8 @@ public partial class PdfEditorControl : UserControl
             if (ShapeDialogs.AskLine(this, look?.Stroke ?? PdfColor.Black, look?.Width ?? 2) is not { } line) return;
             _selection = null;
             int changed = 0;
-            if (Edit(d => changed = d.SetShapeLine(page, shapes, line.Colour, line.Width)) && changed == 0) ShowStatus("There is no line to change here.");
+            if (Edit(d => changed = d.SetShapeLine(page, shapes, line.Colour, line.Width)))
+                ShowStatus(changed == 0 ? "There is no line to change here." : "The line has its new look. Undo brings the old one back.");
         });
         menu.Items.Add(new Separator());
         AddLayerItems(menu, shapes);
@@ -1691,6 +1697,12 @@ public partial class PdfEditorControl : UserControl
     {
         CommitEditor();
         var p = PagePoint(e);
+        if (_annotations.LastOrDefault(a => a.Bounds.Contains(p.X, p.Y)) is { } note)
+        {
+            ShowNoteMenu(note);
+            e.Handled = true;
+            return;
+        }
         var image = _images.LastOrDefault(i => i.Bounds.Contains(p.X, p.Y));
         if (image is null)
         {
@@ -1722,6 +1734,40 @@ public partial class PdfEditorControl : UserControl
         Add("Delete image", DeleteSelection);
         menu.IsOpen = true;
         e.Handled = true;
+    }
+
+    /// <summary>
+    /// A right-click on a comment or a highlight: its words, its place among the other comments
+    /// and highlights, and deleting. (They always lie over the page itself; the layer entries
+    /// order them among themselves.)
+    /// </summary>
+    private void ShowNoteMenu(AnnotationInfo note)
+    {
+        Focus();
+        Select(new Selection(ItemKind.Annotation, note.Index, note.Bounds));
+        int page = _page, index = note.Index;
+        var menu = new ContextMenu { PlacementTarget = Overlay };
+        void Add(string header, Action action)
+        {
+            var item = new MenuItem { Header = header };
+            item.Click += (_, _) => action();
+            menu.Items.Add(item);
+        }
+        void Layer(bool up)
+        {
+            _selection = null;
+            bool moved = false;
+            if (!Edit(d => moved = d.MoveAnnotationLayer(page, index, up))) return;
+            ShowStatus(moved ? (up ? "Moved one layer up among the comments and highlights." : "Moved one layer down among the comments and highlights.")
+                : (up ? "It is the topmost comment or highlight already." : "It is the lowest comment or highlight already.") + " Comments and highlights always lie over the page itself.");
+        }
+        Add(note.Kind == AnnotationKind.Comment ? "Edit comment..." : "Comment on this...", () => EditAnnotationText(index));
+        menu.Items.Add(new Separator());
+        Add("Move one layer up", () => Layer(true));
+        Add("Move one layer down", () => Layer(false));
+        menu.Items.Add(new Separator());
+        Add("Delete", DeleteSelection);
+        menu.IsOpen = true;
     }
 
     /// <summary>

@@ -175,6 +175,60 @@ public sealed unsafe partial class PdfDocument
             return false;
         }
     }
+    /// <summary>
+    /// Moves a comment, highlight or other annotation one step up or down among the page's
+    /// annotations (the later one lies over the earlier). Annotations always lie over what is
+    /// printed on the page itself; this only orders them among themselves. Returns false when it
+    /// is already the topmost or the lowest.
+    /// </summary>
+    public bool MoveAnnotationLayer(int pageIndex, int annotationIndex, bool up)
+    {
+        CheckPage(pageIndex);
+        int count;
+        using (var page = OpenPage(pageIndex)) count = Native.FPDFPage_GetAnnotCount(page.Handle);
+        if (annotationIndex < 0 || annotationIndex >= count) throw new ArgumentOutOfRangeException(nameof(annotationIndex));
+        int other = up ? annotationIndex + 1 : annotationIndex - 1;
+        if (other < 0 || other >= count) return false;
+        if (_openPages > 0) throw new PdfException("The order cannot be changed while the page is being edited.");
+        try
+        {
+            // PDFium has no way to reorder annotations: the page's list of them is rewritten in the file itself.
+            byte[] plain;
+            using (var ms = new MemoryStream())
+            {
+                SaveAsPdfiumWritesIt(ms);
+                plain = ms.ToArray();
+            }
+            var file = PdfFile.Open(plain);
+            if (file.Trailer?["Encrypt"] is not null) throw new PdfException("The order of comments and highlights cannot be changed in a password-protected file.");
+            var read = PageInstructions.Read(file, pageIndex, out _) ?? throw new PdfException("The page could not be read to change the order.");
+            var listed = read.PageNode["Annots"];
+            var (list, source) = file.Resolve(listed, read.PageSource);
+            if (list is not { Kind: PdfFile.Kind.Array } || source is null || list.Items.Count != count) throw new PdfException("The page's comments and highlights could not be read to change the order.");
+            var items = list.Items.Select(n => PdfFile.Raw(n, source)).ToList();
+            (items[annotationIndex], items[other]) = (items[other], items[annotationIndex]);
+            string reordered = "[" + string.Join(" ", items) + "]";
+
+            var replace = new Dictionary<int, byte[]>();
+            if (listed is { Kind: PdfFile.Kind.Ref }) replace[listed.RefNumber] = Encoding.Latin1.GetBytes(reordered);
+            else
+            {
+                var pageDict = new StringBuilder("<<");
+                foreach (var (key, value) in read.PageNode.Entries)
+                    pageDict.Append('/').Append(key).Append(' ').Append(key == "Annots" ? reordered : PdfFile.Raw(value, read.PageSource)).Append(' ');
+                pageDict.Append(">>");
+                replace[read.PageObject] = Encoding.Latin1.GetBytes(pageDict.ToString());
+            }
+            byte[] packed = PackObjects.Apply(plain, replace, new HashSet<int>()) ?? throw new PdfException("The order could not be changed in this file.");
+            Reload(packed);
+            return true;
+        }
+        catch (Exception e) when (e is FormatException or InvalidDataException or IndexOutOfRangeException or KeyNotFoundException or InvalidOperationException or OverflowException)
+        {
+            throw new PdfException("The order could not be changed in this file.");
+        }
+    }
+
     /// <summary>Replaces what PDFium holds with a document read from the given bytes: this object stays the same document to its users.</summary>
     private void Reload(byte[] data)
     {

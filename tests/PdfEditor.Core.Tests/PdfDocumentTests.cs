@@ -1637,4 +1637,64 @@ public class PdfDocumentTests
         Assert.Equal([[a], [b, far]], joined.Select(d => d.ObjectIndices.ToArray()).ToArray());
         Assert.Equal(3, doc.GetShapes(0).Count);
     }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(90)]
+    public void A_highlight_and_a_comment_can_be_moved(int pageRotation)
+    {
+        using var doc = PdfDocument.Create();
+        doc.AddPage(400, 400);
+        doc.SetPageRotation(0, pageRotation);
+        int highlight = doc.AddHighlight(0, [new PdfRect(100, 100, 80, 14), new PdfRect(100, 116, 50, 14)], new PdfColor(255, 235, 60));
+        int comment = doc.AddComment(0, 300, 50, "A note");
+        var was = doc.GetAnnotations(0);
+
+        doc.MoveAnnotation(0, highlight, 60, 120);
+        doc.MoveAnnotation(0, comment, -200, 10);
+        using var saved = PdfDocument.Open(doc.ToBytes());
+        var now = saved.GetAnnotations(0);
+        Assert.Equal(was[highlight].Bounds.X + 60, now[highlight].Bounds.X, 0.5);
+        Assert.Equal(was[highlight].Bounds.Y + 120, now[highlight].Bounds.Y, 0.5);
+        Assert.Equal(was[highlight].Bounds.Width, now[highlight].Bounds.Width, 0.5);
+        Assert.Equal(was[comment].Bounds.X - 200, now[comment].Bounds.X, 0.5);
+        Assert.Equal(was[comment].Bounds.Y + 10, now[comment].Bounds.Y, 0.5);
+        Assert.Equal("A note", now[comment].Contents);
+
+        // The highlight is drawn where it now is, and no longer where it was.
+        var picture = saved.Render(0, 1, true);
+        bool Yellow(double x, double y)
+        {
+            int at = (int)y * picture.Stride + (int)x * 4;
+            return picture.Pixels[at] < 200 && picture.Pixels[at + 1] > 200 && picture.Pixels[at + 2] > 200; // blue low, green and red high
+        }
+        Assert.True(Yellow(100 + 60 + 20, 100 + 120 + 7));
+        Assert.False(Yellow(120, 107));
+    }
+
+    [Fact]
+    public void Highlights_can_be_put_over_or_under_one_another()
+    {
+        using var doc = PdfDocument.Create();
+        doc.AddPage(400, 400);
+        doc.AddText(0, 50, 50, "Some text on the page", new TextStyle { Size = 12 });
+        doc.AddHighlight(0, [new PdfRect(100, 100, 80, 14)], new PdfColor(255, 235, 60), comment: "first");
+        doc.AddHighlight(0, [new PdfRect(120, 105, 80, 14)], new PdfColor(60, 200, 90), comment: "second");
+        doc.AddComment(0, 300, 50, "third");
+        Assert.Equal(["first", "second", "third"], doc.GetAnnotations(0).Select(a => a.Contents).ToArray());
+
+        Assert.True(doc.MoveAnnotationLayer(0, 0, up: true));
+        Assert.Equal(["second", "first", "third"], doc.GetAnnotations(0).Select(a => a.Contents).ToArray());
+        Assert.True(doc.MoveAnnotationLayer(0, 2, up: false));
+        Assert.Equal(["second", "third", "first"], doc.GetAnnotations(0).Select(a => a.Contents).ToArray());
+        Assert.False(doc.MoveAnnotationLayer(0, 2, up: true));  // already on top
+        Assert.False(doc.MoveAnnotationLayer(0, 0, up: false)); // already the lowest
+
+        using var saved = PdfDocument.Open(doc.ToBytes());
+        var kept = saved.GetAnnotations(0);
+        Assert.Equal(["second", "third", "first"], kept.Select(a => a.Contents).ToArray());
+        Assert.Equal(new PdfColor(255, 235, 60), kept[2].Color with { A = 255 });
+        Assert.Equal(100, kept[2].Bounds.X, 0.5);
+        Assert.Contains("Some text on the page", saved.GetPageText(0));
+    }
 }
