@@ -16,11 +16,19 @@ internal static class PackObjects
 {
     private const int PerStream = 200; // objects in one object stream
 
-    public static byte[] Apply(byte[] pdf)
+    public static byte[] Apply(byte[] pdf) => Apply(pdf, null, null) ?? pdf;
+
+    /// <summary>
+    /// Packs the file with some objects given new contents (a whole object body: a dictionary, or
+    /// a dictionary with its stream) and some left out. Returns null when the file could not be
+    /// packed, since the replacements would then be lost.
+    /// </summary>
+    public static byte[]? Apply(byte[] pdf, IReadOnlyDictionary<int, byte[]>? replace, IReadOnlySet<int>? drop)
     {
         try
         {
-            var pass = new Pass(pdf);
+            var pass = new Pass(pdf) { Replace = replace, Drop = drop };
+            if (replace is not null || drop is not null) return pass.Run();
             var packed = pass.Run();
             // Smaller is the usual reason to use the packed file; a deleted page that PDFium left
             // in the file is another, whatever the size.
@@ -28,7 +36,7 @@ internal static class PackObjects
         }
         catch (Exception e) when (e is FormatException or IndexOutOfRangeException or ArgumentException or InvalidDataException or OverflowException)
         {
-            return pdf;
+            return replace is null && drop is null ? pdf : null;
         }
     }
 
@@ -159,6 +167,10 @@ internal static class PackObjects
         }
 
         private sealed record Obj(int Number, int Generation, int ValueStart, int ValueEnd, bool IsStream, int End, List<int> Refs);
+
+        /// <summary>Objects to write with other contents than the file has, and objects to leave out.</summary>
+        public IReadOnlyDictionary<int, byte[]>? Replace { get; init; }
+        public IReadOnlySet<int>? Drop { get; init; }
 
         /// <summary>True when the file held deleted pages, or bookmarks leading to them, that were taken out.</summary>
         public bool LeftPagesBehind { get; private set; }
@@ -377,6 +389,8 @@ internal static class PackObjects
                 if (!o.IsStream && o.ValueEnd - o.ValueStart == 4 && At(o.ValueStart, "null")) dead.Add(o.Number);
             var gone = dead.Count > 0 && rootEntries is not null ? UnhookBookmarks(objects, rootEntries, dead, rewritten) : [];
             LeftPagesBehind = pagesLeft || gone.Count > 0 || rewritten.Count > 0;
+            if (Drop is not null) gone.UnionWith(Drop);
+            if (Replace is not null) foreach (var (number, body) in Replace) rewritten[number] = body;
 
             // What can be reached from the trailer; the rest is left behind.
             var keep = new HashSet<int>();
@@ -433,7 +447,8 @@ internal static class PackObjects
             {
                 where[o.Number] = (1, output.Position, o.Generation);
                 Write($"{o.Number} {o.Generation} obj\n");
-                output.Write(d, o.ValueStart, o.End - o.ValueStart);
+                if (rewritten.TryGetValue(o.Number, out var replaced)) output.Write(replaced);
+                else output.Write(d, o.ValueStart, o.End - o.ValueStart);
                 Write(o.IsStream ? "\nendobj\n" : "\nendobj\n");
             }
             var loose = kept.Where(o => !o.IsStream && o.Generation == 0).ToList();

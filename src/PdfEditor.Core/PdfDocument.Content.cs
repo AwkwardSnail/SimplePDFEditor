@@ -454,6 +454,7 @@ public sealed unsafe partial class PdfDocument
     /// <summary>Removes a text run or image by its object index.</summary>
     public void RemoveObject(int pageIndex, int objectIndex)
     {
+        if (TryEditInstructions(pageIndex, [objectIndex], _ => null)) return;
         using var page = OpenPage(pageIndex);
         var obj = GetObject(page, objectIndex);
         if (Native.FPDFPage_RemoveObject(page.Handle, obj) == 0) throw new PdfException("Could not remove the item.");
@@ -464,12 +465,22 @@ public sealed unsafe partial class PdfDocument
     /// <summary>Moves a text run or image by an offset in view space.</summary>
     public void MoveObject(int pageIndex, int objectIndex, double dx, double dy)
     {
+        if (TryEditInstructions(pageIndex, [objectIndex], MoveInPageCoordinates(pageIndex, dx, dy))) return;
         using var page = OpenPage(pageIndex);
         var obj = GetObject(page, objectIndex);
         // Only the direction of the offset changes between spaces, not the origin.
         var v = page.ViewToUser;
         TransformObject(obj, new Affine(1, 0, 0, 1, v.A * dx + v.C * dy, v.B * dx + v.D * dy));
         page.Dirty = page.ChangedExisting = true;
+    }
+
+    /// <summary>A move given as seen on the page, as a transform in the page's own coordinates (the same for every item).</summary>
+    private Func<int, Affine?> MoveInPageCoordinates(int pageIndex, double dx, double dy)
+    {
+        using var page = OpenPage(pageIndex);
+        var v = page.ViewToUser; // only the direction of the offset changes between spaces, not the origin
+        var move = new Affine(1, 0, 0, 1, v.A * dx + v.C * dy, v.B * dx + v.D * dy);
+        return _ => move;
     }
 
     // ------------------------------------------------------------------ drawings (vector artwork)
@@ -523,6 +534,8 @@ public sealed unsafe partial class PdfDocument
     /// <summary>Moves several objects together (a drawing's shapes, for example) by an offset in view space.</summary>
     public void MoveObjects(int pageIndex, IEnumerable<int> objectIndices, double dx, double dy)
     {
+        objectIndices = objectIndices.ToList();
+        if (TryEditInstructions(pageIndex, (List<int>)objectIndices, MoveInPageCoordinates(pageIndex, dx, dy))) return;
         using var page = OpenPage(pageIndex);
         var v = page.ViewToUser;
         double ux = v.A * dx + v.C * dy, uy = v.B * dx + v.D * dy;
@@ -534,6 +547,8 @@ public sealed unsafe partial class PdfDocument
     /// <summary>Removes several objects together.</summary>
     public void RemoveObjects(int pageIndex, IEnumerable<int> objectIndices)
     {
+        objectIndices = objectIndices.ToList();
+        if (TryEditInstructions(pageIndex, (List<int>)objectIndices, _ => null)) return;
         using var page = OpenPage(pageIndex);
         // Look every object up before removing any: removing one shifts the indices after it.
         foreach (var obj in objectIndices.Distinct().Select(i => GetObject(page, i)).ToList())

@@ -49,6 +49,8 @@ Lines are grouped into a paragraph when they share a text size and the page's us
 - Text that runs past the bottom of the page is reported (`RunsOffPage`), not moved to the next page.
 - Right-to-left scripts, vertical text and text inside form XObjects are not re-flowed.
 
+**Editing a page's instructions directly.** A page is a list of drawing instructions. PDFium reads them into a list of items and can write that list back only in part: it leaves out or flattens whatever it does not model (tiled patterns, gradients, soft masks, pictures written into the instructions, Type 3 text, CMYK and spot colours, letter spacing). So where it can, the editor does not have PDFium write the page at all. It reads the instructions itself (`Content/PageInstructions`), works out which of them draw the item being changed, and rewrites only those: an item is moved by boxing its own instructions in a shift, and removed by taking them out. Everything else on the page stays byte for byte as it was. This is used for moving and deleting shapes, pictures, groups and gradients; text, and an item that would be moved out of the clip it is drawn under, still go the older way described next.
+
 **Keeping the rest of the page intact.** When an existing object changes, PDFium rewrites the page's original content and drops word and character spacing on the way, which would shift justified text elsewhere on the page. Before that happens, any text that depends on those settings is redrawn with each character pinned where it was. This also protects the editor's move, resize, delete and edit-text operations.
 
 ## Importing RTF

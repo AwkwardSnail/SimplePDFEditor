@@ -1171,7 +1171,7 @@ public class PdfDocumentTests
     }
 
     /// <summary>Everything a saved file says, with its compressed parts unpacked, as text to search in.</summary>
-    private static string Unpacked(byte[] pdf)
+    internal static string Unpacked(byte[] pdf)
     {
         string raw = System.Text.Encoding.Latin1.GetString(pdf);
         var all = new System.Text.StringBuilder(raw);
@@ -1276,8 +1276,19 @@ public class PdfDocumentTests
         return changed;
     }
 
-    [Fact]
-    public void Gradients_survive_an_edit_to_their_page()
+    /// <summary>Runs a test with edits made directly in a page's instructions, or the older way (PDFium writes the page again).</summary>
+    internal static void WithDirectEdits(bool direct, Action test)
+    {
+        bool was = PdfDocument.EditInstructionsDirectly;
+        PdfDocument.EditInstructionsDirectly = direct;
+        try { test(); }
+        finally { PdfDocument.EditInstructionsDirectly = was; }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Gradients_survive_an_edit_to_their_page(bool direct) => WithDirectEdits(direct, () =>
     {
         using var doc = PdfDocument.Open(PdfWithGradients());
         var before = doc.Render(0, 1, false);
@@ -1295,11 +1306,15 @@ public class PdfDocumentTests
         Assert.True(PixelsThatDiffer(before, after, gradient) < 60, $"{PixelsThatDiffer(before, after, gradient)} pixels of the gradient changed");
         var black = new PdfRect(102, 792 - 318, 76, 16);
         Assert.Equal(0, PixelsThatDiffer(before, after, black));
-        Assert.Equal(2, saved.GetImages(0).Count); // each is now a picture of itself
-    }
+        // Edited directly, the gradients are untouched; written again by PDFium, each is now a picture of itself.
+        Assert.Equal(direct ? 0 : 2, saved.GetImages(0).Count);
+        Assert.Equal(direct ? 2 : 0, saved.GetGradients(0).Count);
+    });
 
-    [Fact]
-    public void A_gradient_that_is_one_flat_colour_is_told_apart_and_can_be_removed()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void A_gradient_that_is_one_flat_colour_is_told_apart_and_can_be_removed(bool direct) => WithDirectEdits(direct, () =>
     {
         using var doc = PdfDocument.Open(PdfWithGradients());
         var gradients = doc.GetGradients(0);
@@ -1315,9 +1330,11 @@ public class PdfDocumentTests
         Assert.True(page.Pixels[where] > 240 && page.Pixels[where + 1] > 240 && page.Pixels[where + 2] > 240, "the black box is gone");
         int kept = (792 - 550) * page.Stride + 110 * 4;
         Assert.True(page.Pixels[kept + 2] > 200 && page.Pixels[kept] < 60, "the real gradient is still there");
-        Assert.Empty(saved.GetGradients(0)); // nothing is left behind on the copy used for looking
+        // Removed directly, the real gradient is still a gradient; the older way it has become a picture.
+        if (direct) Assert.Null(Assert.Single(saved.GetGradients(0)).PlainColour);
+        else Assert.Empty(saved.GetGradients(0));
         Assert.Equal(1, saved.PageCount);
-    }
+    });
 
     /// <summary>
     /// A PDF with a proper cross-reference table and two fonts, F1 and F2, each drawing one word.

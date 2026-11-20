@@ -1,4 +1,6 @@
+using System.Globalization;
 using System.Text;
+using PdfEditor.Core.Interop;
 using PdfEditor.Core.Preflight;
 using static PdfEditor.Core.Preflight.PdfFile;
 
@@ -12,7 +14,22 @@ internal enum ItemKind { Text = 1, Path = 2, Image = 3, Shading = 4, Group = 5 }
 /// from <see cref="Start"/> (the first instruction that belongs to it alone) to <see cref="End"/>
 /// (just past the instruction that paints it).
 /// </summary>
-internal sealed record DrawnItem(ItemKind Kind, int Start, int End, string Operator);
+/// <param name="OperatorAt">Where the painting instruction itself starts (after its operands).</param>
+/// <param name="Space">The coordinate space in force when it is painted: from that space to the page's own.</param>
+/// <param name="ClipsToo">The path is also used to clip what follows, so it cannot simply be taken out or boxed in.</param>
+/// <param name="Clip">What the item is clipped to where it is drawn.</param>
+internal sealed record DrawnItem(ItemKind Kind, int Start, int End, string Operator, int OperatorAt, Affine Space, bool ClipsToo, Clip Clip);
+
+/// <summary>
+/// The clip in force at some point of a page's instructions: nothing (no box, not complex), an
+/// upright box in the page's coordinates, or some other shape that is not followed here.
+/// </summary>
+internal readonly record struct Clip(PdfRect? Box, bool Complex)
+{
+    /// <summary>Whether something covering the given box (in the page's coordinates) is sure to be left whole.</summary>
+    public bool LeavesWhole(double left, double bottom, double right, double top, double slack = 0.5) =>
+        !Complex && (Box is not { } b || left >= b.X - slack && right <= b.Right + slack && bottom >= b.Y - slack && top <= b.Bottom + slack);
+}
 
 /// <summary>
 /// A page's own drawing instructions (its content streams, unpacked and joined), read straight
@@ -28,6 +45,12 @@ internal sealed class PageInstructions
     public required IReadOnlyList<DrawnItem> Items { get; init; }
     /// <summary>Where each of the page's content streams starts in <see cref="Data"/>.</summary>
     public required IReadOnlyList<int> StreamStarts { get; init; }
+    /// <summary>The page's object in the file, and the objects that hold its content streams, in order.</summary>
+    public required int PageObject { get; init; }
+    public required IReadOnlyList<int> ContentObjects { get; init; }
+    /// <summary>The page's dictionary as read from the file.</summary>
+    public required Node PageNode { get; init; }
+    public required byte[] PageSource { get; init; }
 
     /// <summary>Reads a page's instructions, or returns null (with the reason) when they cannot be read reliably.</summary>
     public static PageInstructions? Read(PdfFile file, int pageIndex, out string? problem)
@@ -37,7 +60,8 @@ internal sealed class PageInstructions
         {
             var page = FindPage(file, pageIndex);
             if (page is null) { problem = "the page was not found in the file's page tree"; return null; }
-            var (pageNode, pageSource, resources, resourcesSource) = page.Value;
+            var (pageNode, pageSource, resources, resourcesSource, pageObject) = page.Value;
+            var contentObjects = new List<int>();
 
             // The content: one stream, or several that are read as if joined.
             var data = new MemoryStream();
@@ -53,13 +77,18 @@ internal sealed class PageInstructions
                 if (unpacked is null) { problem = "a content stream is packed in a way that is not read here"; return null; }
                 if (data.Length > 0) data.WriteByte((byte)'\n');
                 starts.Add((int)data.Length);
+                contentObjects.Add(reference.RefNumber);
                 data.Write(unpacked);
             }
             _ = contentsSource;
 
             var bytes = data.ToArray();
             var names = new ResourceNames(file, resources, resourcesSource);
-            return new PageInstructions { Data = bytes, StreamStarts = starts, Items = new Scanner(bytes, names).Run() };
+            return new PageInstructions
+            {
+                Data = bytes, StreamStarts = starts, Items = new Scanner(bytes, names).Run(),
+                PageObject = pageObject, ContentObjects = contentObjects, PageNode = pageNode, PageSource = pageSource,
+            };
         }
         catch (Exception e) when (e is FormatException or InvalidDataException or IndexOutOfRangeException or ArgumentException or KeyNotFoundException or InvalidOperationException)
         {
@@ -69,21 +98,21 @@ internal sealed class PageInstructions
     }
 
     /// <summary>The page with the given index, with the resources it uses (its own, or those it inherits).</summary>
-    private static (Node Page, byte[] Source, Node? Resources, byte[]? ResourcesSource)? FindPage(PdfFile file, int pageIndex)
+    private static (Node Page, byte[] Source, Node? Resources, byte[]? ResourcesSource, int Number)? FindPage(PdfFile file, int pageIndex)
     {
         var (root, rootSource) = file.Resolve(file.Trailer?["Root"], file.Bytes);
         if (root is null || rootSource is null) return null;
         int seen = 0;
         return Walk(root["Pages"], rootSource, null, null, 0);
 
-        (Node, byte[], Node?, byte[]?)? Walk(Node? reference, byte[] source, Node? inherited, byte[]? inheritedSource, int depth)
+        (Node, byte[], Node?, byte[]?, int)? Walk(Node? reference, byte[] source, Node? inherited, byte[]? inheritedSource, int depth)
         {
             var (node, nodeSource) = file.Resolve(reference, source);
             if (node is not { Kind: Kind.Dict } || nodeSource is null || depth > 64) return null;
             if (node["Resources"] is { } own) (inherited, inheritedSource) = file.Resolve(own, nodeSource);
             var (kids, kidsSource) = file.Resolve(node["Kids"], nodeSource);
             if (kids is not { Kind: Kind.Array } || kidsSource is null)
-                return seen++ == pageIndex ? (node, nodeSource, inherited, inheritedSource) : null; // a page
+                return seen++ == pageIndex ? (node, nodeSource, inherited, inheritedSource, reference is { Kind: Kind.Ref } ? reference.RefNumber : -1) : null; // a page
             foreach (var kid in kids.Items)
                 if (Walk(kid, kidsSource, inherited, inheritedSource, depth + 1) is { } found) return found;
             return null;
@@ -130,7 +159,16 @@ internal sealed class PageInstructions
         private bool _lastStringEmpty, _arrayHasText;
         // The path being built.
         private int _pathStart = -1, _points;
-        private bool _lastIsOpenMove;
+        private bool _lastIsOpenMove, _clipPending;
+        // Numbers waiting for their operator, and the coordinate space (with those saved by "q").
+        private readonly List<double> _numbers = [];
+        private Affine _space = Affine.Identity;
+        private readonly Stack<(Affine Space, Clip Clip)> _saved = new();
+        // The clip in force; whether the path being built is one plain rectangle (and which); text that clips.
+        private Clip _clip;
+        private bool _onlyARectangle, _textClips;
+        private int _pathSteps, _textMode;
+        private readonly double[] _rectangle = new double[4];
 
         private static bool IsSpace(byte b) => b is 0 or 9 or 10 or 12 or 13 or 32;
         private static bool IsDelimiter(byte b) => b is (byte)'(' or (byte)')' or (byte)'<' or (byte)'>' or (byte)'[' or (byte)']' or (byte)'{' or (byte)'}' or (byte)'/' or (byte)'%';
@@ -155,12 +193,17 @@ internal sealed class PageInstructions
                     if (_p == start) { _p++; continue; }
                     byte first = d[start];
                     bool number = first is (byte)'+' or (byte)'-' or (byte)'.' || first is >= (byte)'0' and <= (byte)'9';
-                    if (number) Operand(start);
+                    if (number)
+                    {
+                        Operand(start);
+                        _numbers.Add(double.TryParse(Encoding.ASCII.GetString(d, start, _p - start), NumberStyles.Float, CultureInfo.InvariantCulture, out double value) ? value : 0);
+                    }
                     else
                     {
                         Operator(Encoding.Latin1.GetString(d, start, _p - start), start);
                         _operandsStart = -1;
                         _lastName = null;
+                        _numbers.Clear();
                     }
                 }
             }
@@ -256,25 +299,59 @@ internal sealed class PageInstructions
             }
         }
 
-        private void Add(ItemKind kind, int start, string op) => _items.Add(new DrawnItem(kind, start, _p, op));
+        private void Add(ItemKind kind, int start, string op, int operatorAt, bool clipsToo = false) =>
+            _items.Add(new DrawnItem(kind, start, _p, op, operatorAt, _space, clipsToo, _clip));
+
+        /// <summary>The path just finished becomes part of the clip, for everything up to the matching "Q".</summary>
+        private void ClipToPath()
+        {
+            bool upright = Math.Abs(_space.B) < 1e-9 && Math.Abs(_space.C) < 1e-9 || Math.Abs(_space.A) < 1e-9 && Math.Abs(_space.D) < 1e-9;
+            if (!_onlyARectangle || !upright) { _clip = _clip with { Complex = true }; return; }
+            var box = _space.MapBounds(_rectangle[0], _rectangle[1], _rectangle[0] + _rectangle[2], _rectangle[1] + _rectangle[3]);
+            if (_clip.Box is { } old)
+            {
+                double l = Math.Max(old.X, box.X), b = Math.Max(old.Y, box.Y), r = Math.Min(old.Right, box.Right), t = Math.Min(old.Bottom, box.Bottom);
+                box = new PdfRect(l, b, Math.Max(0, r - l), Math.Max(0, t - b));
+            }
+            _clip = _clip with { Box = box };
+        }
 
         private void Operator(string op, int at)
         {
             int start = _operandsStart >= 0 ? _operandsStart : at;
             switch (op)
             {
+                // ---- the coordinate space
+                case "q": _saved.Push((_space, _clip)); break;
+                case "Q": if (_saved.Count > 0) (_space, _clip) = _saved.Pop(); break;
+                case "cm":
+                    if (_numbers.Count >= 6)
+                    {
+                        int n = _numbers.Count;
+                        _space = Affine.Concat(new Affine(_numbers[n - 6], _numbers[n - 5], _numbers[n - 4], _numbers[n - 3], _numbers[n - 2], _numbers[n - 1]), _space);
+                    }
+                    break;
+                case "W" or "W*": _clipPending = true; break;
+
                 // ---- building a path
                 case "m":
+                    _onlyARectangle = false;
+                    _pathSteps++;
                     if (_pathStart < 0) _pathStart = start;
                     if (!_lastIsOpenMove) _points++;
                     _lastIsOpenMove = true;
                     break;
                 case "l" or "c" or "v" or "y":
+                    _onlyARectangle = false;
+                    _pathSteps++;
                     if (_points == 0) break; // nothing to continue from: ignored
                     _points += op == "l" ? 1 : 3;
                     _lastIsOpenMove = false;
                     break;
                 case "re":
+                    _onlyARectangle = _pathSteps == 0 && _numbers.Count >= 4;
+                    if (_onlyARectangle) for (int i = 0; i < 4; i++) _rectangle[i] = _numbers[_numbers.Count - 4 + i];
+                    _pathSteps++;
                     if (_pathStart < 0) _pathStart = start;
                     _points += 4;
                     _lastIsOpenMove = false;
@@ -287,25 +364,34 @@ internal sealed class PageInstructions
                 case "S" or "s" or "f" or "F" or "f*" or "B" or "B*" or "b" or "b*" or "n":
                 {
                     int points = _lastIsOpenMove ? _points - 1 : _points; // a move at the very end draws nothing
-                    if (op != "n" && points >= 2) Add(ItemKind.Path, _pathStart >= 0 ? _pathStart : start, op);
-                    (_pathStart, _points, _lastIsOpenMove) = (-1, 0, false);
+                    if (op != "n" && points >= 2) Add(ItemKind.Path, _pathStart >= 0 ? _pathStart : start, op, at, _clipPending);
+                    if (_clipPending && _pathSteps > 0) ClipToPath(); // the item itself is drawn under the clip as it was before
+                    (_pathStart, _points, _lastIsOpenMove, _clipPending, _pathSteps, _onlyARectangle) = (-1, 0, false, false, 0, false);
                     break;
                 }
 
                 // ---- text
                 case "Tj" or "'" or "\"":
-                    if (!_lastStringEmpty) Add(ItemKind.Text, start, op);
+                    if (!_lastStringEmpty) { Add(ItemKind.Text, start, op, at); if (_textMode >= 4) _textClips = true; }
                     break;
                 case "TJ":
-                    if (_arrayHasText) Add(ItemKind.Text, start, op);
+                    if (_arrayHasText) { Add(ItemKind.Text, start, op, at); if (_textMode >= 4) _textClips = true; }
+                    break;
+                case "Tr":
+                    if (_numbers.Count >= 1) _textMode = (int)_numbers[^1];
+                    break;
+                case "ET":
+                    // Text drawn in a clipping mode becomes part of the clip when its block ends.
+                    if (_textClips) _clip = _clip with { Complex = true };
+                    _textClips = false;
                     break;
 
                 // ---- pictures, groups, gradients
                 case "Do":
-                    if (_lastName is not null && names.XObject(_lastName) is { } kind) Add(kind, start, op);
+                    if (_lastName is not null && names.XObject(_lastName) is { } kind) Add(kind, start, op, at);
                     break;
                 case "sh":
-                    if (_lastName is not null && names.HasShading(_lastName)) Add(ItemKind.Shading, start, op);
+                    if (_lastName is not null && names.HasShading(_lastName)) Add(ItemKind.Shading, start, op, at);
                     break;
                 case "BI":
                     InlineImage(at);
@@ -345,7 +431,7 @@ internal sealed class PageInstructions
                 if (i > 0 && !IsSpace(d[i - 1])) continue;
                 if (i + 2 < d.Length && !IsSpace(d[i + 2]) && !IsDelimiter(d[i + 2])) continue;
                 _p = i + 2;
-                Add(ItemKind.Image, at, "BI");
+                Add(ItemKind.Image, at, "BI", at);
                 return;
             }
             _p = d.Length;
