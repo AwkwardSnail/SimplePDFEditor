@@ -1525,7 +1525,7 @@ public class PdfDocumentTests
     {
         // Words placed one by one, with less than a full space between them on the full lines,
         // as a typesetter does to fit a last word in.
-        string[][] lines = [["alpha", "beta", "gamma", "delta", "epsilon", "zeta"], ["eta", "theta", "iota", "kappa", "lambda", "omega"], ["xi", "omicron"]];
+        string[][] lines = [["alpha", "beta", "gamma", "delta", "epsilon", "zeta"], ["eta", "theta", "iota", "kappa", "lambda", "mu"], ["extraordinary", "xi"]];
         using var measure = PdfDocument.Create();
         measure.AddPage(595, 842);
         double WidthOf(string word)
@@ -1539,18 +1539,20 @@ public class PdfDocumentTests
 
         using var doc = PdfDocument.Create();
         doc.AddPage(595, 842);
+        // Both full lines end at the same right edge (justified): the first by squeezing its spaces.
+        double right = 100 + lines[0].Sum(WidthOf) + 5 * 0.75 * space;
         for (int l = 0; l < lines.Length; l++)
         {
-            double x = 100;
+            double x = 100, gap = l == 0 ? 0.75 * space : l == 1 ? (right - 100 - lines[1].Sum(WidthOf)) / 5 : space;
             foreach (string word in lines[l])
             {
                 doc.AddText(0, x, 200 + 15 * l, word, new TextStyle { Size = 12 });
-                x += WidthOf(word) + (l < 2 ? 0.75 : 1) * space;
+                x += WidthOf(word) + gap;
             }
         }
         using var saved = PdfDocument.Open(doc.ToBytes());
         var paragraph = Assert.Single(saved.GetParagraphs(0));
-        Assert.Equal(3, paragraph.Text.Count(c => c == ' ') >= 13 ? 3 : 0); // read as one paragraph of running text
+        Assert.Equal(13, paragraph.Text.Count(c => c == ' ')); // read as one paragraph of running text
         var before = saved.Render(0, 1, false);
 
         var result = saved.ReplaceParagraphText(0, paragraph.Index, paragraph.Text);
@@ -1558,6 +1560,12 @@ public class PdfDocumentTests
         Assert.Equal(0, result.HeightChange, 0.001);
         using var again = PdfDocument.Open(saved.ToBytes());
         Assert.Equal(paragraph.Text, Assert.Single(again.GetParagraphs(0)).Text);
+        // Every word is still on the line it was on.
+        var words = again.GetTextRuns(0);
+        double LineOf(string word) => words.First(r => r.Text.Trim() == word).Bounds.Bottom;
+        Assert.Equal(LineOf("alpha"), LineOf("zeta"), 4.0); // within a descender of each other
+        Assert.Equal(LineOf("eta"), LineOf("mu"), 4.0);
+        Assert.True(LineOf("eta") > LineOf("zeta") + 8);
         Assert.Equal(before.Width, again.Render(0, 1, false).Width);
     }
 
