@@ -326,6 +326,29 @@ internal static class InstructionEdits
         return Applied(page, edits);
     }
 
+    /// <summary>
+    /// The page's instructions with pieces of text given another colour. The colour is set just
+    /// before the piece is shown and the colour that was in force put back just after, so the
+    /// piece itself, and with it the writing position it leaves behind, is exactly as written.
+    /// </summary>
+    public static byte[]? Recolour(PageInstructions page, IReadOnlyList<int> items, PdfColor colour)
+    {
+        if (colour.A != 255) return null; // a see-through colour needs a named setting
+        var edits = new List<Edit>();
+        foreach (int index in items)
+        {
+            if (index < 0 || index >= page.Items.Count) return null;
+            var item = page.Items[index];
+            if (item.Kind != ItemKind.Text) return null;
+            var state = item.State;
+            string was = state.FillSpace is null && state.FillColour is null ? "0 g" : $"{state.FillSpace} {state.FillColour}".Trim();
+            string shown = Encoding.Latin1.GetString(page.Data, item.Start, item.End - item.Start);
+            edits.Add(new Edit(item.Start, item.End, Encoding.Latin1.GetBytes(
+                $"{Number(colour.R / 255.0, 4)} {Number(colour.G / 255.0, 4)} {Number(colour.B / 255.0, 4)} rg {shown} {was}")));
+        }
+        return Applied(page, edits);
+    }
+
     private static byte[]? Applied(PageInstructions page, List<Edit> edits)
     {
         // Applied from the end backwards, so earlier places stay where they are.

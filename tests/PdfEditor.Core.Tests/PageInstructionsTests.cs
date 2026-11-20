@@ -629,4 +629,40 @@ public unsafe class PageInstructionsTests
         Assert.Contains("/Pattern cs /P1 scn", file);
         Assert.DoesNotContain("two lines) Tj T* (of plain words", file); // the old words are gone from the file, not just hidden
     }
+    // ------------------------------------------------------------------ the look of text
+
+    [Fact]
+    public void Text_takes_another_colour_or_font_without_the_rest_of_the_page_being_written_again()
+    {
+        // Blue text in one block, sharing a writing position, beside a CMYK square.
+        byte[] pdf = Page("0 1 1 0 k 230 230 40 40 re f BT /F1 12 Tf 0 0 1 rg 30 200 Td (one ) Tj (two ) Tj (three) Tj 0 -20 Td (below) Tj ET",
+            "/Font<</F1<</Type/Font/Subtype/Type1/BaseFont/Courier>>>>");
+        using var doc = PdfDocument.Open(pdf);
+        var places = Pieces(doc);
+        int direct = PdfDocument.DirectEdits, rewritten = PdfDocument.RewrittenEdits;
+        var red = new PdfColor(200, 30, 30);
+        var blue = new PdfColor(0, 0, 255);
+
+        // Colour alone: the piece keeps its font and its place; the pieces after it keep their colour.
+        Assert.Equal(1, doc.FormatText(0, [doc.GetTextRuns(0)[1].ObjectIndex], new TextFormat { Color = red }));
+        var runs = doc.GetTextRuns(0);
+        Assert.Equal([blue, red, blue, blue], runs.Select(r => r.Color).ToArray());
+        Assert.All(runs, r => Assert.Equal("Courier", r.FontName));
+        for (int i = 0; i < 4; i++) AssertSamePlace(places[i], (runs[i].Text, runs[i].Bounds), "after recolouring");
+
+        // Bold and bigger: that piece is set anew; the others stay put, and it keeps its place in the order.
+        Assert.Equal(1, doc.FormatText(0, [doc.GetTextRuns(0)[2].ObjectIndex], new TextFormat { Bold = true, Size = 16 }));
+        Assert.Equal((direct + 2, rewritten), (PdfDocument.DirectEdits, PdfDocument.RewrittenEdits));
+        byte[] saved = doc.ToBytes();
+        using var again = PdfDocument.Open(saved);
+        runs = again.GetTextRuns(0);
+        Assert.Equal(["one", "two", "three", "below"], runs.Select(r => r.Text.Trim()).ToArray());
+        Assert.Equal(["Courier", "Courier", "Courier-Bold", "Courier"], runs.Select(r => r.FontName).ToArray());
+        Assert.Equal([blue, red, blue, blue], runs.Select(r => r.Color).ToArray());
+        foreach (int i in new[] { 0, 1, 3 }) AssertSamePlace(places[i], (runs[i].Text, runs[i].Bounds), "after restyling");
+        Assert.Equal(places[2].Bounds.X, runs[2].Bounds.X, 0.6);                    // it starts where it started
+        Assert.Equal(places[2].Bounds.Bottom, runs[2].Bounds.Bottom, 0.6);          // on the same line
+        Assert.InRange(runs[2].Bounds.Height / places[2].Bounds.Height, 1.2, 1.5);  // a third bigger
+        Assert.Contains("0 1 1 0 k", PdfDocumentTests.Unpacked(saved));              // the CMYK square is as it was written
+    }
 }

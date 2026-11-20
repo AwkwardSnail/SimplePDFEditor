@@ -16,15 +16,50 @@ public sealed unsafe partial class PdfDocument
     public int FormatText(int pageIndex, IEnumerable<int> objectIndices, TextFormat format)
     {
         if (format.Size is { } wanted && (wanted <= 0 || wanted > 2000)) throw new ArgumentOutOfRangeException(nameof(format), "The size must be between 0 and 2000 points.");
-        using var page = OpenPage(pageIndex);
-        var objects = objectIndices.Distinct().Select(i => GetObject(page, i)).Where(o => Native.FPDFPageObj_GetType(o) == Native.PAGEOBJ_TEXT).ToList();
-        if (objects.Count == 0) return 0;
+        var indices = objectIndices.Distinct().ToList();
         bool restyle = format.Font is not null || format.Bold is not null || format.Italic is not null || format.Size is not null;
+        int changed = 0;
+
+        // Pieces that only get a new colour are done first, in the page's own instructions: the colour
+        // is set just for the piece and put back after it. Nothing else on the page is touched.
+        var coloured = new HashSet<int>();
+        if (format.Color is { A: 255 } plain && EditInstructionsDirectly)
+        {
+            var only = new List<int>();
+            using (var look = OpenPage(pageIndex))
+            {
+                var seen = restyle ? PageAnalysis.Analyze(look) : null;
+                var styles = new Dictionary<StyleRef, StyleRef>();
+                foreach (int index in indices)
+                {
+                    var obj = GetObject(look, index);
+                    if (Native.FPDFPageObj_GetType(obj) != Native.PAGEOBJ_TEXT) continue;
+                    List<Glyph>? glyphs = null;
+                    seen?.GlyphsByObject.TryGetValue(obj, out glyphs);
+                    StyleRef? source = glyphs is { Count: > 0 } && glyphs.Any(g => !char.IsWhiteSpace(g.Ch)) ? glyphs[0].Style : null;
+                    StyleRef? target = null;
+                    if (source is not null && !styles.TryGetValue(source, out target)) styles[source] = target = Reformat(look, source, format with { Color = null });
+                    if (source is null || ReferenceEquals(target, source)) only.Add(index);
+                }
+            }
+            if (only.Count > 0 && TryRewriteInstructions(pageIndex, (read, _) => Content.InstructionEdits.Recolour(read, only, plain)))
+            {
+                coloured.UnionWith(only);
+                changed += only.Count;
+            }
+        }
+
+        using var page = OpenPage(pageIndex);
+        var objects = indices.Where(i => !coloured.Contains(i)).Select(i => GetObject(page, i)).Where(o => Native.FPDFPageObj_GetType(o) == Native.PAGEOBJ_TEXT).ToList();
+        if (objects.Count == 0) return changed;
         var analysis = restyle ? PageAnalysis.Analyze(page) : null;
         var coverage = new Coverage(this, page);
         var derived = new Dictionary<StyleRef, StyleRef>();
         var systemFonts = new Dictionary<StyleRef, StyleRef?>();
-        int changed = 0;
+        // Restyled pieces are drawn anew and the old ones taken away afterwards, in the page's instructions
+        // (see PageHandle.RemoveLater), unless something here has to go through PDFium anyway.
+        bool later = EditInstructionsDirectly, throughPdfium = false;
+        int before = changed;
 
         foreach (var obj in objects)
         {
@@ -39,6 +74,7 @@ public sealed unsafe partial class PdfDocument
                 // Nothing about the letters changes (or they cannot be rebuilt): a new colour at most.
                 if (format.Color is not { } colour) continue;
                 Native.FPDFPageObj_SetFillColor(obj, colour.R, colour.G, colour.B, colour.A);
+                throughPdfium = true;
                 changed++;
                 continue;
             }
@@ -71,18 +107,25 @@ public sealed unsafe partial class PdfDocument
                 int end = start;
                 while (end < all.Length && ReferenceEquals(FontFor(all[end]), use)) end++;
                 string piece = all[start..end];
-                page.NewObjects.Add(DrawText(page, piece, use, x, first.Y, index + made));
+                page.NewObjects.Add(DrawText(page, piece, use, x, first.Y, later ? null : index + made));
                 foreach (char ch in piece) x += use.Advance(ch);
                 made++;
                 start = end;
             }
-            Native.FPDFPage_RemoveObject(page.Handle, obj);
-            Native.FPDFPageObj_Destroy(obj);
+            if (later) page.RemoveLater(obj);
+            else
+            {
+                Native.FPDFPage_RemoveObject(page.Handle, obj);
+                Native.FPDFPageObj_Destroy(obj);
+                throughPdfium = true;
+            }
             changed++;
         }
-        if (changed > 0)
+        if (changed > before)
         {
-            page.Dirty = page.ChangedExisting = true;
+            page.Dirty = true;
+            if (throughPdfium) page.ChangedExisting = true;
+            else page.NewTakeThePlaceOfOld = true;
             _charsByFont = null;
         }
         return changed;
