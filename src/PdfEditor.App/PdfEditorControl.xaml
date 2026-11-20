@@ -182,16 +182,29 @@
 
             <ScrollViewer x:Name="PageScroll" Grid.Column="2" Background="{DynamicResource BgBrush}"
                           HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"
-                          PreviewMouseWheel="PageScroll_PreviewMouseWheel">
-                <Border Margin="24" HorizontalAlignment="Center" VerticalAlignment="Top" Background="White"
-                        BorderBrush="{DynamicResource LineHoverBrush}" BorderThickness="1">
-                    <Grid>
-                        <Image x:Name="PageImage" Stretch="Fill" />
-                        <Canvas x:Name="Overlay" Background="Transparent" ClipToBounds="True"
-                                MouseLeftButtonDown="Overlay_MouseDown" MouseMove="Overlay_MouseMove" MouseLeftButtonUp="Overlay_MouseUp"
-                                MouseRightButtonDown="Overlay_RightClick" MouseLeave="Overlay_MouseLeave" />
-                    </Grid>
-                </Border>
+                          PreviewMouseWheel="PageScroll_PreviewMouseWheel" ScrollChanged="PageScroll_ScrollChanged">
+                <!-- The page being worked on, with the page before it above and the one after it below, so that
+                     scrolling runs on from page to page. The neighbours are pictures; the one that comes to the
+                     middle of the view becomes the page being worked on (see PageScroll_ScrollChanged). -->
+                <StackPanel x:Name="PageStack" Margin="24" HorizontalAlignment="Center" VerticalAlignment="Top">
+                    <Border x:Name="PrevPage" Margin="0,0,0,24" HorizontalAlignment="Center" Background="White" Visibility="Collapsed"
+                            BorderBrush="{DynamicResource LineHoverBrush}" BorderThickness="1" MouseLeftButtonDown="PrevPage_MouseDown">
+                        <Image x:Name="PrevImage" Stretch="Fill" />
+                    </Border>
+                    <Border x:Name="PageFrame" HorizontalAlignment="Center" Background="White"
+                            BorderBrush="{DynamicResource LineHoverBrush}" BorderThickness="1">
+                        <Grid>
+                            <Image x:Name="PageImage" Stretch="Fill" />
+                            <Canvas x:Name="Overlay" Background="Transparent" ClipToBounds="True"
+                                    MouseLeftButtonDown="Overlay_MouseDown" MouseMove="Overlay_MouseMove" MouseLeftButtonUp="Overlay_MouseUp"
+                                    MouseRightButtonDown="Overlay_RightClick" MouseLeave="Overlay_MouseLeave" />
+                        </Grid>
+                    </Border>
+                    <Border x:Name="NextPage" Margin="0,24,0,0" HorizontalAlignment="Center" Background="White" Visibility="Collapsed"
+                            BorderBrush="{DynamicResource LineHoverBrush}" BorderThickness="1" MouseLeftButtonDown="NextPage_MouseDown">
+                        <Image x:Name="NextImage" Stretch="Fill" />
+                    </Border>
+                </StackPanel>
             </ScrollViewer>
 
             <DockPanel Grid.Column="3">

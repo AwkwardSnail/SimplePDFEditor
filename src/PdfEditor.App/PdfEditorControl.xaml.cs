@@ -76,7 +76,7 @@ public partial class PdfEditorControl : UserControl
         FillColours(HighlightBox, [("Yellow", PdfColor.Yellow), ("Green", new(140, 235, 130)), ("Pink", new(255, 160, 200)), ("Blue", new(140, 200, 255)), ("Orange", new(255, 190, 90))]);
         PreviewKeyDown += OnPreviewKeyDown;
         Drop += OnDrop;
-        Loaded += (_, _) => RefreshAll();
+        Loaded += (_, _) => { RefreshAll(); ShowPageStart(); };
         _session.Changed += OnSessionChanged;
         UpdateHint();
     }
@@ -187,6 +187,7 @@ public partial class PdfEditorControl : UserControl
         _selection = null;
         _shapeGroups.Clear();
         RefreshAll();
+        if (IsLoaded) ShowPageStart();
     }
 
     private void OnSessionChanged(object? sender, EventArgs e) => RefreshAll();
@@ -252,9 +253,15 @@ public partial class PdfEditorControl : UserControl
     /// <summary>Screen units (WPF device-independent pixels) per PDF point at the current zoom.</summary>
     private double ViewScale => _zoom * 96.0 / 72.0;
 
-    private void RefreshAll()
+    private void RefreshAll() => RefreshAll(thumbnails: true, hold: true);
+
+    /// <param name="thumbnails">False when only the page being shown changed, not what is on any page.</param>
+    /// <param name="hold">False when the caller puts the view in place itself afterwards.</param>
+    private void RefreshAll(bool thumbnails, bool hold)
     {
         if (!IsLoaded) return;
+        // Whatever changes above the page (the page before it appearing, a new zoom), the page stays where it is in the view.
+        double? held = hold && PageFrame.IsVisible ? PageFrame.TranslatePoint(new Point(0, 0), PageScroll).Y : null;
         DiscardEditor();
         int count = Doc.PageCount;
         _page = Math.Clamp(_page, 0, Math.Max(0, count - 1));
@@ -267,13 +274,14 @@ public partial class PdfEditorControl : UserControl
         {
             while (_pages.Count > count) _pages.RemoveAt(_pages.Count - 1);
             while (_pages.Count < count) _pages.Add(new PageItem(_pages.Count, this));
-            foreach (var item in _pages) item.Invalidate();
+            if (thumbnails) foreach (var item in _pages) item.Invalidate();
             Thumbs.SelectedIndex = _page;
             Thumbs.ScrollIntoView(Thumbs.SelectedItem);
         }
         finally { _updating = false; }
 
         RenderPage();
+        if (held is { } y) HoldPageAt(y);
         UndoButton.IsEnabled = _session.CanUndo;
         RedoButton.IsEnabled = _session.CanRedo;
         DeletePageButton.IsEnabled = count > 1;
@@ -294,6 +302,7 @@ public partial class PdfEditorControl : UserControl
         PageImage.Source = bitmap;
         PageImage.Width = Overlay.Width = size.Width * ViewScale;
         PageImage.Height = Overlay.Height = size.Height * ViewScale;
+        ShowNeighbours();
 
         _runs = Doc.GetTextRuns(_page);
         _images = Doc.GetImages(_page);
@@ -616,6 +625,144 @@ public partial class PdfEditorControl : UserControl
         if (!Edit(d => d.MovePage(from, to))) { _page = from; RefreshAll(); }
     }
 
+    // ------------------------------------------------------------------ scrolling on from page to page
+
+    private bool _settlingScroll;   // the view is being put in place by the program, not scrolled by the user
+    private int _neighbourStamp;    // tells a queued drawing of the neighbours that it has been overtaken
+
+    /// <summary>
+    /// Makes room for the page before and the page after, above and below the page being worked on.
+    /// Their pictures are drawn when the program next has nothing to do, so that an edit is shown as
+    /// quickly as before; until then a picture already there for the same page stays.
+    /// </summary>
+    private void ShowNeighbours()
+    {
+        int count = Doc.PageCount;
+        void Place(Border frame, Image image, int page)
+        {
+            if (page < 0 || page >= count)
+            {
+                frame.Visibility = Visibility.Collapsed;
+                image.Source = null;
+                image.Tag = null;
+                return;
+            }
+            var size = Doc.GetPageSize(page);
+            image.Width = size.Width * ViewScale;
+            image.Height = size.Height * ViewScale;
+            string key = NeighbourKey(page);
+            if (!Equals(image.Tag, key)) image.Source = null; // another page, or another zoom: blank paper until drawn
+            image.Tag = key;
+            frame.Visibility = Visibility.Visible;
+        }
+        Place(PrevPage, PrevImage, _page - 1);
+        Place(NextPage, NextImage, _page + 1);
+
+        int stamp = ++_neighbourStamp;
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.ApplicationIdle, () =>
+        {
+            if (stamp != _neighbourStamp || !IsLoaded) return;
+            DrawNeighbour(PrevImage, _page - 1);
+            DrawNeighbour(NextImage, _page + 1);
+        });
+    }
+
+    private string NeighbourKey(int page) => FormattableString.Invariant($"{page}@{ViewScale:0.####}");
+
+    private void DrawNeighbour(Image image, int page)
+    {
+        if (page < 0 || page >= Doc.PageCount) return;
+        try
+        {
+            double dpi = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+            var picture = Doc.Render(page, ViewScale * dpi);
+            var bitmap = BitmapSource.Create(picture.Width, picture.Height, 96 * dpi, 96 * dpi, PixelFormats.Bgr32, null, picture.Pixels, picture.Stride);
+            bitmap.Freeze();
+            image.Source = bitmap;
+        }
+        catch (PdfException) { } // it stays blank; it is drawn properly when it becomes the page being worked on
+    }
+
+    /// <summary>Scrolls so that the top of the page being worked on is at the given height in the view.</summary>
+    private void HoldPageAt(double y)
+    {
+        bool was = _settlingScroll;
+        _settlingScroll = true;
+        try
+        {
+            PageStack.UpdateLayout();
+            double now = PageFrame.TranslatePoint(new Point(0, 0), PageScroll).Y;
+            if (Math.Abs(now - y) > 0.5)
+            {
+                PageScroll.ScrollToVerticalOffset(Math.Max(0, PageScroll.VerticalOffset + now - y));
+                PageScroll.UpdateLayout();
+            }
+            // A neighbour wider than this page makes the whole stack wider: keep this page in the middle
+            // of the view when it fits there, so that it is all in sight as it was on its own.
+            if (PageScroll.ExtentWidth > PageScroll.ViewportWidth + 0.5 && PageFrame.ActualWidth <= PageScroll.ViewportWidth)
+            {
+                PageScroll.ScrollToHorizontalOffset((PageScroll.ExtentWidth - PageScroll.ViewportWidth) / 2);
+                PageScroll.UpdateLayout();
+            }
+        }
+        finally { _settlingScroll = was; }
+    }
+
+    /// <summary>
+    /// As the view is scrolled, the page that reaches its middle becomes the page being worked on.
+    /// Nothing moves on screen: the pages stay exactly where they were scrolled to.
+    /// </summary>
+    private void PageScroll_ScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        if (_settlingScroll || _switchQueued || !IsLoaded || e.VerticalChange == 0 || _drag != Drag.None) return;
+        // This arrives in the middle of laying the window out, when nothing can be measured or moved
+        // reliably: the change of page waits until that is done (and still comes before anything is drawn).
+        _switchQueued = true;
+        Dispatcher.BeginInvoke(() =>
+        {
+            _switchQueued = false;
+            if (_settlingScroll || !IsLoaded || _drag != Drag.None) return;
+            double middle = PageScroll.ViewportHeight / 2;
+            if (NextPage.IsVisible && NextPage.TranslatePoint(new Point(0, 0), PageScroll).Y < middle) WorkOn(_page + 1);
+            else if (PrevPage.IsVisible && PrevPage.TranslatePoint(new Point(0, PrevPage.ActualHeight), PageScroll).Y > middle) WorkOn(_page - 1);
+        });
+    }
+
+    private bool _switchQueued;
+
+    private void PrevPage_MouseDown(object sender, MouseButtonEventArgs e) { WorkOn(_page - 1); e.Handled = true; }
+    private void NextPage_MouseDown(object sender, MouseButtonEventArgs e) { WorkOn(_page + 1); e.Handled = true; }
+
+    /// <summary>Makes a neighbouring page the page being worked on, leaving everything where it is in the view.</summary>
+    private void WorkOn(int page)
+    {
+        if (page < 0 || page >= Doc.PageCount || Math.Abs(page - _page) != 1) return;
+        bool down = page > _page;
+        double y = (down ? NextPage : PrevPage).TranslatePoint(new Point(0, 0), PageScroll).Y; // where that page is now
+        _settlingScroll = true;
+        try
+        {
+            CommitEditor();
+            // The page left behind is already drawn: its picture goes to the neighbour's place at once.
+            var leaving = down ? PrevImage : NextImage;
+            leaving.Source = PageImage.Source;
+            leaving.Tag = NeighbourKey(_page);
+            _page = page;
+            _selection = null;
+            RefreshAll(thumbnails: false, hold: false);
+            HoldPageAt(y);
+        }
+        finally { _settlingScroll = false; }
+    }
+
+    /// <summary>Scrolls to the top of the page being worked on, or to its end.</summary>
+    private void ShowPageStart(bool end = false)
+    {
+        PageStack.UpdateLayout();
+        const double margin = 24;
+        HoldPageAt(end ? Math.Min(margin, PageScroll.ViewportHeight - PageFrame.ActualHeight - margin) : margin);
+    }
+
     private void Thumbs_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_updating || Thumbs.SelectedIndex < 0 || Thumbs.SelectedIndex == _page) return;
@@ -629,12 +776,7 @@ public partial class PdfEditorControl : UserControl
         _page = page;
         _selection = null;
         RefreshAll();
-        if (showBottom)
-        {
-            PageScroll.UpdateLayout(); // the new page's height must be known before scrolling to its end
-            PageScroll.ScrollToBottom();
-        }
-        else PageScroll.ScrollToTop();
+        ShowPageStart(end: showBottom);
     }
 
     private void ZoomOut_Click(object sender, RoutedEventArgs e) => SetZoom(ZoomSteps.LastOrDefault(z => z < _zoom - 0.001, ZoomSteps[0]));
@@ -661,17 +803,7 @@ public partial class PdfEditorControl : UserControl
             e.Handled = true;
             return;
         }
-        // Scrolling past the end of a page carries on to the next page (and past the top, to the one before).
-        if (e.Delta < 0 && PageScroll.VerticalOffset >= PageScroll.ScrollableHeight - 0.5 && _page < Doc.PageCount - 1)
-        {
-            GoToPage(_page + 1);
-            e.Handled = true;
-        }
-        else if (e.Delta > 0 && PageScroll.VerticalOffset <= 0.5 && _page > 0)
-        {
-            GoToPage(_page - 1, showBottom: true);
-            e.Handled = true;
-        }
+        // Otherwise the view scrolls, and runs on from page to page (see PageScroll_ScrollChanged).
     }
 
     // ------------------------------------------------------------------ tools
@@ -1970,7 +2102,7 @@ public partial class PdfEditorControl : UserControl
         _selection = null;
         _page = page + 1;
         RefreshAll();
-        PageScroll.ScrollToTop();
+        ShowPageStart();
         ShowStatus($"Page break added: {moved} item{(moved == 1 ? "" : "s")} moved to the new page {page + 2}. Undo puts them back.");
     }
 
@@ -2058,7 +2190,7 @@ public partial class PdfEditorControl : UserControl
         bool again = cut && IsLongPage(_page);
         if (!again) EndPageBreak();
         RefreshAll();
-        PageScroll.ScrollToTop();
+        ShowPageStart();
         string what = cut ? $"Page cut in two: the rest is now page {page + 2}." : $"Page break added: {moved} item{(moved == 1 ? "" : "s")} moved to the new page {page + 2}.";
         ShowStatus(what + (again ? " Click again to cut the rest, or press Esc to finish." : " Undo puts it back."));
     }
