@@ -1286,6 +1286,7 @@ public partial class PdfEditorControl : UserControl
     {
         var notes = new List<string> { $"Paragraph re-flowed onto {result.LineCount} line{(result.LineCount == 1 ? "" : "s")}." };
         if (result.MovedItems > 0) notes.Add($"{result.MovedItems} item{(result.MovedItems == 1 ? "" : "s")} below moved {(result.HeightChange > 0 ? "down" : "up")}.");
+        if (result.LeftInPlace) notes.Add(result.HeightChange > 0 ? "This page is laid out in boxes or tables, so nothing below was moved: the paragraph may overlap what is under it. Drag things to make room." : "This page is laid out in boxes or tables, so nothing below was moved up.");
         if (result.UsedSubstituteFont) notes.Add("Some characters were not in the original font, so a similar font was used for them.");
         if (result.RunsOffPage) notes.Add("Warning: text now runs past the bottom of the page.");
         ShowStatus(string.Join(" ", notes));

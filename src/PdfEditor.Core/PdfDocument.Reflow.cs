@@ -544,6 +544,36 @@ public sealed unsafe partial class PdfDocument
         bool InColumn(PdfRect r) => r.Right > columnLeft && r.X < columnRight;
         bool Below(double baselineY) => baselineY > oldLast + 0.3 * em;
 
+        // Moving what lies below suits running text. Where the paragraph sits in a box, or a table or
+        // frame reaches across it and its neighbours, only part of that would move and the page would
+        // be torn apart: there the paragraph changes in place and the rest is left for the user to move.
+        bool leftInPlace = false;
+        if (push)
+        {
+            List<PdfRect>? textBeside = null; // text below the paragraph that would stay where it is
+            foreach (var obj in analysis.Objects)
+            {
+                int type = Native.FPDFPageObj_GetType(obj);
+                if (type == Native.PAGEOBJ_TEXT || paragraphObjects.Contains(obj)) continue;
+                var b = ObjectBounds(page, obj);
+                if (!InColumn(b) || b.Y >= footerTop || Area(b) > 0.85 * page.Width * page.Height) continue;
+                bool moves = b.Y >= oldBounds.Bottom - 0.1 * em;
+                if (!moves)
+                {
+                    // Something drawn that holds the paragraph and room below it: a box, a panel, a picture behind.
+                    if (b.Bottom > oldBounds.Bottom + 0.5 * em) { leftInPlace = true; break; }
+                }
+                else if (type == 2 && (b.X < columnLeft - 2 * em || b.Right > columnRight + 2 * em))
+                {
+                    // A rule or shading that reaches well past the column, over text that would not move with it.
+                    textBeside ??= analysis.Objects.Where(o => !paragraphObjects.Contains(o) && analysis.GlyphsByObject.TryGetValue(o, out var gs) && gs.Any(g => !g.IsSpace && Below(g.Y) && g.Box.Y < footerTop))
+                                                   .Select(o => ObjectBounds(page, o)).Where(r => !InColumn(r)).ToList();
+                    if (textBeside.Any(r => r.Right > b.X && r.X < b.Right)) { leftInPlace = true; break; }
+                }
+            }
+            if (leftInPlace) push = false;
+        }
+
         var rebuild = new HashSet<IntPtr>(paragraphObjects); // objects to take apart and redraw
         var move = new List<IntPtr>();
         foreach (var obj in analysis.Objects)
@@ -649,7 +679,7 @@ public sealed unsafe partial class PdfDocument
         var bounds2 = lines.Count == 0
             ? new PdfRect(oldBounds.X, oldBounds.Y, 0, 0)
             : new PdfRect(minX, oldBounds.Y, maxX - minX, newBottom - oldBounds.Y);
-        return new ReflowResult(bounds2, lines.Count, dy, substituted, offPage, move.Count + movedAnnotations);
+        return new ReflowResult(bounds2, lines.Count, dy, substituted, offPage, move.Count + movedAnnotations) { LeftInPlace = leftInPlace };
     }
 
     /// <summary>Splits glyphs into runs that can each be drawn as one piece of text at the first glyph's position.</summary>

@@ -402,4 +402,38 @@ public unsafe class ReflowTests
         Assert.Throws<ArgumentOutOfRangeException>(() => doc.ReplaceInParagraph(0, 0, 5, 500, "x"));
         Assert.Throws<ArgumentException>(() => doc.ReplaceText("", "x"));
     }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void A_paragraph_growing_inside_a_box_leaves_what_is_below_where_it_is(bool boxed)
+    {
+        using var made = PdfDocument.Create();
+        made.AddPage(595, 842);
+        made.AddText(0, 100, 200, "The first line of a short paragraph that was wrapped", new TextStyle { Size = 12 });
+        made.AddText(0, 100, 215, "extraordinarily early.", new TextStyle { Size = 12 });
+        made.AddText(0, 100, 260, "A separate note below", new TextStyle { Size = 12 });
+        if (boxed) made.AddShape(0, ShapeKind.Box, [new PdfPoint(85, 180), new PdfPoint(420, 290)], new ShapeStyle { Stroke = new PdfColor(0, 0, 0), Width = 1 });
+        using var doc = Reopen(made);
+        var paragraph = Find(doc, "The first line");
+        double noteWas = doc.GetTextRuns(0).Single(r => r.Text.StartsWith("A separate")).Bounds.Y;
+
+        var result = doc.ReplaceParagraphText(0, paragraph.Index, paragraph.Text + " And then it was given a good many more words, enough of them to need two or three lines more than it had.");
+        Assert.True(result.LineCount > 2);
+        Assert.True(result.HeightChange > 10);
+        using var saved = Reopen(doc);
+        double noteNow = saved.GetTextRuns(0).Single(r => r.Text.StartsWith("A separate")).Bounds.Y;
+        if (boxed)
+        {
+            // Moving the note would leave the box behind: everything stays, and the result says so.
+            Assert.True(result.LeftInPlace);
+            Assert.Equal(0, result.MovedItems);
+            Assert.Equal(noteWas, noteNow, 0.01);
+        }
+        else
+        {
+            Assert.False(result.LeftInPlace);
+            Assert.Equal(noteWas + result.HeightChange, noteNow, 0.5);
+        }
+    }
 }

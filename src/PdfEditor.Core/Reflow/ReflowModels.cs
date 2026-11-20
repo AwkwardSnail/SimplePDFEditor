@@ -54,4 +54,11 @@ public sealed record ReflowOptions
 /// <param name="UsedSubstituteFont">Some characters were not in the original font, so a similar font was used for them.</param>
 /// <param name="RunsOffPage">Text or moved content now extends past the bottom of the page.</param>
 /// <param name="MovedItems">How many items below the paragraph were moved.</param>
-public sealed record ReflowResult(PdfRect Bounds, int LineCount, double HeightChange, bool UsedSubstituteFont, bool RunsOffPage, int MovedItems);
+public sealed record ReflowResult(PdfRect Bounds, int LineCount, double HeightChange, bool UsedSubstituteFont, bool RunsOffPage, int MovedItems)
+{
+    /// <summary>
+    /// The paragraph changed height but nothing below it was moved, because the page is laid out in
+    /// boxes or tables that moving part of would tear apart. The paragraph may now overlap what is below.
+    /// </summary>
+    public bool LeftInPlace { get; init; }
+}
