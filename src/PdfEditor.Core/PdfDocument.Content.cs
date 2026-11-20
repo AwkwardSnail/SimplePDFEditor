@@ -245,6 +245,16 @@ public sealed unsafe partial class PdfDocument
                 Native.FS_MATRIX om;
                 Native.FPDFPageObj_GetMatrix(old, &om);
 
+                // The letter spacing the piece was set with, to give the new text too (see LetterSpacingOf).
+                PdfEditor.Core.Reflow.StyleRef? oldStyle = null;
+                double spacing = 0;
+                if (PdfEditor.Core.Reflow.PageAnalysis.Analyze(later).GlyphsByObject.TryGetValue(old, out var oldGlyphs) && oldGlyphs.Count > 0)
+                {
+                    var inOrder = oldGlyphs.OrderBy(g => g.Index).ToList();
+                    oldStyle = inOrder[0].Style;
+                    spacing = LetterSpacingOf([inOrder], 4);
+                }
+
                 bool kept = false;
                 var font = Native.FPDFTextObj_GetFont(old);
                 IntPtr made = font == IntPtr.Zero ? IntPtr.Zero : Native.FPDFPageObj_CreateTextObj(Doc, font, oldSize);
@@ -262,6 +272,7 @@ public sealed unsafe partial class PdfDocument
                     }
                 }
                 if (!kept) made = InsertTextObject(later, newText, LookAlikeStyle(FontName(old), oldSize, new PdfColor((byte)fr, (byte)fg, (byte)fb, (byte)fa)), new Affine(om.a, om.b, om.c, om.d, om.e, om.f), out _);
+                if (kept && oldStyle is not null) SpaceNewText(later, made, newText, oldStyle, spacing * oldStyle.Em, later: true);
                 // Outlined or unseen text (the text layer of a scan) stays outlined or unseen.
                 if (mode > 0)
                 {

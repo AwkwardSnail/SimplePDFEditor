@@ -98,7 +98,10 @@ public sealed unsafe partial class PdfDocument
             // In the old piece's place in the drawing order, starting where it started.
             int index = -1, count = Native.FPDFPage_CountObjects(page.Handle);
             for (int i = 0; i < count && index < 0; i++) if (Native.FPDFPage_GetObject(page.Handle, i) == obj) index = i;
-            var first = glyphs!.OrderBy(g => g.Index).First();
+            var inOrder = glyphs!.OrderBy(g => g.Index).ToList();
+            var first = inOrder[0];
+            // The piece keeps the letter spacing it was set with (see LetterSpacingOf).
+            double spacing = LetterSpacingOf([inOrder], 4);
             double x = first.X;
             int start = 0, made = 0;
             while (start < all.Length)
@@ -107,8 +110,10 @@ public sealed unsafe partial class PdfDocument
                 int end = start;
                 while (end < all.Length && ReferenceEquals(FontFor(all[end]), use)) end++;
                 string piece = all[start..end];
-                page.NewObjects.Add(DrawText(page, piece, use, x, first.Y, later ? null : index + made));
-                foreach (char ch in piece) x += use.Advance(ch);
+                var drawn = DrawText(page, piece, use, x, first.Y, later ? null : index + made);
+                page.NewObjects.Add(drawn);
+                SpaceNewText(page, drawn, piece, use, spacing * use.Em, later);
+                foreach (char ch in piece) x += use.Advance(ch) + spacing * use.Em;
                 made++;
                 start = end;
             }

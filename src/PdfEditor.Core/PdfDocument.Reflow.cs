@@ -464,24 +464,7 @@ public sealed unsafe partial class PdfDocument
         // The paragraph's letter spacing: how much closer together, or further apart, its letters stand
         // than their font sets them (a share of the type size). Publishers often tighten type a little;
         // text laid out again without that would be wider than the text around it and wrap sooner.
-        double tracking = 0;
-        {
-            var gaps = new List<double>();
-            foreach (var l in p.Lines)
-                for (int i = 1; i < l.Glyphs.Count; i++)
-                {
-                    var a = l.Glyphs[i - 1];
-                    var g = l.Glyphs[i];
-                    if (g.Index != a.Index + 1 || g.SpaceBefore || char.IsWhiteSpace(a.Ch) || char.IsWhiteSpace(g.Ch) || !ReferenceEquals(a.Style, g.Style) || a.Style.Em <= 0) continue;
-                    gaps.Add((g.X - a.End) / a.Style.Em);
-                }
-            if (gaps.Count >= 8)
-            {
-                gaps.Sort();
-                double middle = gaps[gaps.Count / 2];
-                if (Math.Abs(middle) >= 0.003 && Math.Abs(middle) <= 0.15) tracking = middle;
-            }
-        }
+        double tracking = LetterSpacingOf(p.Lines.Select(l => (IReadOnlyList<Glyph>)l.Glyphs), 8);
 
         bool substituted = false;
         var items = new List<Item>(chars.Count);
@@ -637,22 +620,7 @@ public sealed unsafe partial class PdfDocument
             var obj = DrawText(page, text, style, x, y, insertAt < 0 ? null : insertAt++);
             created.Add(obj);
             page.NewObjects.Add(obj);
-            double natural = text.Sum(ch => style.Advance(ch));
-            Native.FS_MATRIX m;
-            if (tracking != 0 && text.Length > 1 && natural > 0 && Native.FPDFPageObj_GetMatrix(obj, &m) != 0)
-            {
-                // The spacing is wanted as seen; the instruction takes it in the text's own space.
-                var u = page.UserToView;
-                double seen = Math.Sqrt(Math.Pow(m.a * u.A + m.b * u.C, 2) + Math.Pow(m.a * u.B + m.b * u.D, 2));
-                double squeeze = (natural + tracking * style.Em * text.Length) / natural;
-                if (later && seen > 1e-9) page.SpaceLetters(obj, tracking * style.Em / seen, squeeze);
-                else
-                {
-                    m.a = (float)(m.a * squeeze);
-                    m.b = (float)(m.b * squeeze);
-                    Native.FPDFPageObj_SetMatrix(obj, &m);
-                }
-            }
+            SpaceNewText(page, obj, text, style, tracking * style.Em, later);
             return obj;
         }
         double newBottom = 0, minX = double.MaxValue, maxX = double.MinValue;
@@ -741,6 +709,53 @@ public sealed unsafe partial class PdfDocument
             run.Add(g);
         }
         if (run.Count > 0) yield return run;
+    }
+
+    /// <summary>
+    /// The letter spacing text was set with: how much closer together (negative) or further apart
+    /// its letters stand than their font sets them, as a share of the type size. Taken from the
+    /// gaps between neighbouring letters inside words; the middle value, so that the odd pair
+    /// moved together by hand does not count. Nought when there is too little to go by.
+    /// </summary>
+    /// <param name="runs">Letters in the order they are shown, line by line or piece by piece.</param>
+    private static double LetterSpacingOf(IEnumerable<IReadOnlyList<Glyph>> runs, int atLeast)
+    {
+        var gaps = new List<double>();
+        foreach (var run in runs)
+            for (int i = 1; i < run.Count; i++)
+            {
+                var a = run[i - 1];
+                var g = run[i];
+                if (g.Index != a.Index + 1 || g.SpaceBefore || char.IsWhiteSpace(a.Ch) || char.IsWhiteSpace(g.Ch) || !ReferenceEquals(a.Style, g.Style) || a.Style.Em <= 0) continue;
+                gaps.Add((g.X - a.End) / a.Style.Em);
+            }
+        if (gaps.Count < atLeast) return 0;
+        gaps.Sort();
+        double middle = gaps[gaps.Count / 2];
+        return Math.Abs(middle) >= 0.003 && Math.Abs(middle) <= 0.15 ? middle : 0;
+    }
+
+    /// <summary>
+    /// Gives a new piece of text a letter spacing (as seen, in points after each letter). Where
+    /// edits are made in the page's instructions it is written there once the page is closed;
+    /// otherwise, PDFium having no way to write it, the piece is made that much narrower or wider.
+    /// </summary>
+    private static void SpaceNewText(PageHandle page, IntPtr obj, string text, StyleRef style, double perLetter, bool later)
+    {
+        double natural = text.Sum(ch => style.Advance(ch));
+        Native.FS_MATRIX m;
+        if (perLetter == 0 || text.Length < 2 || natural <= 0 || Native.FPDFPageObj_GetMatrix(obj, &m) == 0) return;
+        // The spacing is wanted as seen; the instruction takes it in the text's own space.
+        var u = page.UserToView;
+        double seen = Math.Sqrt(Math.Pow(m.a * u.A + m.b * u.C, 2) + Math.Pow(m.a * u.B + m.b * u.D, 2));
+        double squeeze = (natural + perLetter * text.Length) / natural;
+        if (later && seen > 1e-9) page.SpaceLetters(obj, perLetter / seen, squeeze);
+        else
+        {
+            m.a = (float)(m.a * squeeze);
+            m.b = (float)(m.b * squeeze);
+            Native.FPDFPageObj_SetMatrix(obj, &m);
+        }
     }
 
     private IntPtr DrawText(PageHandle page, string text, StyleRef style, double x, double baseline, int? index = null)

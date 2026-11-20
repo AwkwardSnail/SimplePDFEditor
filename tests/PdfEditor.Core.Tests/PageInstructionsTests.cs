@@ -704,4 +704,40 @@ public unsafe class PageInstructionsTests
         }
         finally { PdfDocument.EditInstructionsDirectly = was; }
     }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Rewritten_and_restyled_pieces_keep_the_letter_spacing_they_were_set_with(bool direct)
+    {
+        // As above: 39 letters of 8 pt Courier set 0.4 pt closer each, 171.6 pt wide instead of 187.2.
+        byte[] bytes = TextPage("BT /F1 8 Tf -0.4 Tc 1 0 0 1 20 200 Tm (The quick brown fox jumps over the lazy) Tj 1 0 0 1 20 170 Tm (extraordinary dog and then it runs off.) Tj ET");
+        bool was = PdfDocument.EditInstructionsDirectly;
+        PdfDocument.EditInstructionsDirectly = direct;
+        try
+        {
+            using var doc = PdfDocument.Open(bytes);
+            var first = doc.GetTextRuns(0).Single(r => r.Text.StartsWith("The quick"));
+            Assert.Equal(171.6, first.Bounds.Width, 1.5);
+
+            // One piece rewritten, with as many letters as before.
+            doc.EditText(0, first.ObjectIndex, "The swift brown fox jumps over the lazy");
+            using var edited = PdfDocument.Open(doc.ToBytes());
+            var rewritten = edited.GetTextRuns(0).Single(r => r.Text.StartsWith("The swift"));
+            Assert.Equal("The swift brown fox jumps over the lazy", rewritten.Text.Trim());
+            Assert.Equal(first.Bounds.X, rewritten.Bounds.X, 0.5);
+            Assert.Equal(first.Bounds.Width, rewritten.Bounds.Width, 1.5);
+
+            // The other piece made bold: Courier Bold's letters are as wide, so it is as wide as it was.
+            var second = edited.GetTextRuns(0).Single(r => r.Text.StartsWith("extraordinary"));
+            Assert.Equal(1, edited.FormatText(0, [second.ObjectIndex], new TextFormat { Bold = true }));
+            using var styled = PdfDocument.Open(edited.ToBytes());
+            var bold = styled.GetTextRuns(0).Where(r => r.Bounds.Y > second.Bounds.Y - 3 && r.Bounds.Bottom < second.Bounds.Bottom + 3).ToList();
+            Assert.Equal("extraordinary dog and then it runs off.", string.Concat(bold.Select(r => r.Text)).Trim());
+            Assert.All(bold, r => Assert.Contains("Bold", r.FontName));
+            Assert.Equal(second.Bounds.X, bold.Min(r => r.Bounds.X), 0.5);
+            Assert.Equal(second.Bounds.Right, bold.Max(r => r.Bounds.Right), 1.5);
+        }
+        finally { PdfDocument.EditInstructionsDirectly = was; }
+    }
 }
