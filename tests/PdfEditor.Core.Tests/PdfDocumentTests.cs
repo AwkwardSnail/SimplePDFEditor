@@ -1697,4 +1697,51 @@ public class PdfDocumentTests
         Assert.Equal(100, kept[2].Bounds.X, 0.5);
         Assert.Contains("Some text on the page", saved.GetPageText(0));
     }
+
+    [Fact]
+    public void The_document_can_be_written_as_rtf_and_read_back()
+    {
+        using var doc = PdfDocument.Create();
+        doc.AddPage(595, 842);
+        doc.AddText(0, 72, 80, "A heading in bold", new TextStyle { Size = 18, Bold = true });
+        doc.AddText(0, 72, 130, "The common garden snail moves slowly across the path in the", new TextStyle { Size = 12 });
+        doc.AddText(0, 72, 146, "early morning, leaving a silver trail that dries in the sun and", new TextStyle { Size = 12 });
+        doc.AddText(0, 72, 162, "extraordinarily soon is gone.", new TextStyle { Size = 12 });
+        doc.AddText(0, 72, 200, "Red serif words {with braces} and a café", new TextStyle { Size = 12, Font = StandardFont.Times, Color = new PdfColor(200, 30, 30) });
+        doc.AddImage(0, new byte[] { 0, 0, 255, 255, 0, 255, 0, 255, 255, 0, 0, 255, 255, 255, 255, 255 }, 2, 2, 72, 240, 80, 80);
+        doc.AddShape(0, ShapeKind.Box, [new PdfPoint(300, 500), new PdfPoint(400, 560)], new ShapeStyle { Stroke = new PdfColor(0, 0, 0), Width = 1 });
+        doc.AddComment(0, 500, 50, "A note");
+        doc.AddPage(842, 595); // a landscape page: a section of its own
+        doc.AddText(1, 72, 80, "On the second page", new TextStyle { Size = 12 });
+
+        byte[] rtf = doc.ExportRtf(out var result);
+        string text = System.Text.Encoding.ASCII.GetString(rtf);
+        Assert.StartsWith("{\\rtf1", text);
+        Assert.Equal(4, result.Paragraphs); // the heading, the three lines as one, the red line, and the second page's
+        Assert.Equal(1, result.Pictures);
+        Assert.Equal(1, result.DrawingsLeftOut);
+        Assert.Equal(1, result.NotesLeftOut);
+        Assert.Contains("\\b A heading in bold", text);
+        Assert.Contains("\\fs36", text);                              // 18 pt
+        Assert.Contains("Times New Roman", text);
+        Assert.Contains("\\red200\\green30\\blue30", text);
+        Assert.Contains("\\{with braces\\}", text);
+        Assert.Contains("caf\\u233?", text);                          // letters outside plain ASCII by their number
+        Assert.Contains("\\pict\\pngblip\\picw2\\pich2", text);
+        Assert.Contains("89504e470d0a1a0a", text);                    // a PNG file begins so
+        Assert.Contains("\\sect\\sectd\\sbkpage\\pgwsxn16840\\pghsxn11900\\lndscpsxn", text);
+        // The three lines of the paragraph are one paragraph again, not three.
+        Assert.Contains("in the early morning, leaving a silver trail that dries in the sun and extraordinarily soon is gone.", text);
+
+        // Read back by the program's own RTF reader, the words are all there, in order, on two pages.
+        using var back = PdfDocument.FromRtf(rtf, out _);
+        Assert.Equal(2, back.PageCount);
+        string first = System.Text.RegularExpressions.Regex.Replace(back.GetPageText(0), @"\s+", " ");
+        Assert.Contains("A heading in bold", first);
+        Assert.Contains("extraordinarily soon is gone.", first);
+        Assert.Contains("Red serif words {with braces} and a café", first);
+        Assert.True(first.IndexOf("A heading", StringComparison.Ordinal) < first.IndexOf("Red serif", StringComparison.Ordinal));
+        Assert.Contains("On the second page", back.GetPageText(1));
+        Assert.Single(back.GetImages(0));
+    }
 }

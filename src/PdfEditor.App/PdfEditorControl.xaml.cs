@@ -217,9 +217,18 @@ public partial class PdfEditorControl : UserControl
         string? path = _session.FilePath;
         if (saveAs || path is null)
         {
-            var dialog = new SaveFileDialog { Filter = "PDF files|*.pdf", DefaultExt = ".pdf", FileName = path is null ? _session.SuggestedFileName : Path.GetFileName(path) };
+            var dialog = new SaveFileDialog
+            {
+                Filter = "PDF files|*.pdf|Rich text, for a word processor (RTF)|*.rtf", DefaultExt = ".pdf", AddExtension = true,
+                FileName = path is null ? _session.SuggestedFileName : Path.GetFileName(path),
+            };
             if (path is not null) dialog.InitialDirectory = Path.GetDirectoryName(path);
             if (dialog.ShowDialog(Window.GetWindow(this)) != true) return false;
+            if (dialog.FilterIndex == 2 || dialog.FileName.EndsWith(".rtf", StringComparison.OrdinalIgnoreCase))
+            {
+                SaveCopyAsRtf(Path.ChangeExtension(dialog.FileName, ".rtf"));
+                return false; // a copy for a word processor: the PDF itself is not saved by this
+            }
             path = dialog.FileName;
         }
         try
@@ -231,6 +240,27 @@ public partial class PdfEditorControl : UserControl
         {
             ShowError($"Could not save to {Path.GetFileName(path)}.", e);
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Writes the text and pictures as RTF, for a word processor. The document being edited stays
+    /// the PDF it was: this is a copy, and says what it could not hold.
+    /// </summary>
+    private void SaveCopyAsRtf(string path)
+    {
+        try
+        {
+            byte[] rtf = Doc.ExportRtf(out var result);
+            File.WriteAllBytes(path, rtf);
+            var notes = new List<string> { $"Saved a copy as {Path.GetFileName(path)}: {result.Paragraphs} paragraph{(result.Paragraphs == 1 ? "" : "s")}" + (result.Pictures > 0 ? $" and {result.Pictures} picture{(result.Pictures == 1 ? "" : "s")}." : ".") };
+            if (result.DrawingsLeftOut > 0 || result.NotesLeftOut > 0) notes.Add("Drawings, comments and highlights are not part of it.");
+            notes.Add("Text runs on as in a word processor, so it will not sit exactly where it does here.");
+            ShowStatus(string.Join(" ", notes));
+        }
+        catch (Exception e)
+        {
+            ShowError($"Could not save to {Path.GetFileName(path)}.", e);
         }
     }
 
