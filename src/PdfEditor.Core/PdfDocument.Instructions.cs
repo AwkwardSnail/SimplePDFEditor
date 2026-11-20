@@ -40,13 +40,46 @@ public sealed unsafe partial class PdfDocument
     }
 
     /// <summary>
+    /// Removes some existing objects of a page and moves others, after a page has been closed
+    /// (see <see cref="PageHandle.RemoveLater"/>): in the page's instructions if possible,
+    /// otherwise through PDFium, which then writes the page again.
+    /// </summary>
+    /// <param name="added">New objects (at the end of the page) to put where the first of the removed ones stood.</param>
+    private void RemoveAndMove(int pageIndex, List<int> remove, List<(int Index, Affine By)> move, List<int> added)
+    {
+        var gone = remove.ToHashSet();
+        var moves = move.Where(m => !gone.Contains(m.Index)).GroupBy(m => m.Index).ToDictionary(g => g.Key, g => g.Last().By);
+        bool direct = TryRewriteInstructions(pageIndex, (read, facts) =>
+        {
+            var changes = gone.Select(i => new InstructionEdits.Change(i, null)).Concat(moves.Select(m => new InstructionEdits.Change(m.Key, m.Value))).ToList();
+            return added.Count > 0 && gone.Count > 0
+                ? InstructionEdits.ApplyAndPlace(read, changes, added, gone.Min(), facts)
+                : InstructionEdits.Apply(read, changes, facts);
+        });
+        if (direct) return;
+
+        using var page = OpenPage(pageIndex);
+        // Look every object up before removing any: removing one shifts the indices after it.
+        var toRemove = gone.Select(i => GetObject(page, i)).ToList();
+        var toMove = moves.Select(m => (Obj: GetObject(page, m.Key), m.Value)).ToList();
+        foreach (var (obj, by) in toMove) TransformObject(obj, by);
+        foreach (var obj in toRemove)
+        {
+            Native.FPDFPage_RemoveObject(page.Handle, obj);
+            Native.FPDFPageObj_Destroy(obj);
+        }
+        page.Dirty = page.ChangedExisting = true;
+    }
+
+    /// <summary>
     /// Reads the page's instructions, checks them against PDFium's objects, has
     /// <paramref name="edit"/> produce new instructions, and puts those in the page's place.
     /// Returns false, with the document as it was, when any step cannot be done.
     /// </summary>
     private bool TryRewriteInstructions(int pageIndex, Func<PageInstructions, InstructionEdits.Facts, byte[]?> edit)
     {
-        if (!EditInstructionsDirectly) { RewrittenEdits++; return false; }
+        // With a page held open the document cannot be read afresh: its handles would be left dangling.
+        if (!EditInstructionsDirectly || _openPages > 0) { RewrittenEdits++; return false; }
         try
         {
             CheckPage(pageIndex);

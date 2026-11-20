@@ -286,8 +286,11 @@ public sealed unsafe partial class PdfDocument : IDisposable
         CheckPage(pageIndex);
         var handle = Native.FPDF_LoadPage(Doc, pageIndex);
         if (handle == IntPtr.Zero) throw new PdfException($"Could not load page {pageIndex + 1}.");
-        return new PageHandle(handle, this);
+        return new PageHandle(handle, this, pageIndex);
     }
+
+    /// <summary>How many pages are held open just now. While any is, the document cannot be read afresh.</summary>
+    private int _openPages;
 
     /// <summary>A loaded page plus the mapping between view space and the PDF's own user space.</summary>
     internal sealed class PageHandle : IDisposable
@@ -307,11 +310,36 @@ public sealed unsafe partial class PdfDocument : IDisposable
         /// <summary>Objects created while this page was open. They are already written exactly as wanted, so the protection step leaves them alone.</summary>
         public HashSet<IntPtr> NewObjects { get; } = [];
         private readonly PdfDocument _owner;
+        private readonly int _pageIndex;
+        // Existing objects to take away, or move, once the page is closed (see RemoveLater).
+        private List<IntPtr>? _removeLater;
+        private List<(IntPtr Obj, Affine By)>? _moveLater;
 
-        public PageHandle(IntPtr handle, PdfDocument owner)
+        /// <summary>
+        /// Takes an existing object off the page, but not yet. A change that both adds new items
+        /// and removes or moves existing ones is done in two steps where possible: PDFium first
+        /// writes the new items (adding is something it does without touching the rest), and then,
+        /// with the page closed, the old ones are removed or moved in the page's own instructions.
+        /// That way the page is never written out again by PDFium, which loses what it cannot write.
+        /// When that second step cannot be done, the objects are removed through PDFium after all.
+        /// </summary>
+        public void RemoveLater(IntPtr obj) => (_removeLater ??= []).Add(obj);
+
+        /// <summary>Moves an existing object by a transform in the page's own coordinates, once the page is closed (see <see cref="RemoveLater"/>).</summary>
+        public void MoveLater(IntPtr obj, Affine by) => (_moveLater ??= []).Add((obj, by));
+
+        /// <summary>
+        /// The objects made in this session replace the ones removed, and are to stand where the
+        /// first of those stood in the order things are drawn and read in.
+        /// </summary>
+        public bool NewTakeThePlaceOfOld { get; set; }
+
+        public PageHandle(IntPtr handle, PdfDocument owner, int pageIndex)
         {
             Handle = handle;
             _owner = owner;
+            _pageIndex = pageIndex;
+            owner._openPages++; // counted here, so that every way of holding a page open is counted
             Width = Native.FPDF_GetPageWidthF(handle);
             Height = Native.FPDF_GetPageHeightF(handle);
 
@@ -329,12 +357,27 @@ public sealed unsafe partial class PdfDocument : IDisposable
 
         public void Dispose()
         {
+            // What was put off: by where the objects stand on the page, since the handles end with it.
+            List<int>? remove = null;
+            List<(int Index, Affine By)>? move = null;
+            List<int> added = [];
+            if (_removeLater is not null || _moveLater is not null)
+            {
+                var indexOf = new Dictionary<IntPtr, int>();
+                int count = Native.FPDFPage_CountObjects(Handle);
+                for (int i = 0; i < count; i++) indexOf[Native.FPDFPage_GetObject(Handle, i)] = i;
+                remove = (_removeLater ?? []).Where(indexOf.ContainsKey).Select(o => indexOf[o]).Distinct().ToList();
+                move = (_moveLater ?? []).Where(m => indexOf.ContainsKey(m.Obj)).Select(m => (indexOf[m.Obj], m.By)).ToList();
+                if (NewTakeThePlaceOfOld) added = NewObjects.Where(indexOf.ContainsKey).Select(o => indexOf[o]).OrderBy(i => i).ToList();
+            }
             if (Dirty)
             {
                 if (ChangedExisting) _owner.PreserveTextLayout(this);
                 Native.FPDFPage_GenerateContent(Handle);
             }
             Native.FPDF_ClosePage(Handle);
+            _owner._openPages--;
+            if (remove is not null && (remove.Count > 0 || move!.Count > 0)) _owner.RemoveAndMove(_pageIndex, remove, move!, added);
         }
     }
 }

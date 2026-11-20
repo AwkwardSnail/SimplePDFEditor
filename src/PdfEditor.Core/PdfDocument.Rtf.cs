@@ -123,7 +123,7 @@ public sealed unsafe partial class PdfDocument
             ClosePage();
             var handle = Native.FPDFPage_New(owner.Doc, firstPage + PagesAdded, rtf.PageWidth, rtf.PageHeight);
             if (handle == IntPtr.Zero) throw new PdfException("Could not add a page.");
-            _page = new PageHandle(handle, owner) { Dirty = true };
+            _page = new PageHandle(handle, owner, firstPage + PagesAdded) { Dirty = true };
             PagesAdded++;
             _y = Top;
             _atTop = true;

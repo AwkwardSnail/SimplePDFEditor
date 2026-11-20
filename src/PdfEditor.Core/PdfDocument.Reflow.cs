@@ -559,12 +559,17 @@ public sealed unsafe partial class PdfDocument
         // 4. Draw the new text, and redraw whatever else the taken-apart objects held.
         //    New objects are created before old ones are destroyed: they share the old fonts.
         var created = new List<IntPtr>();
-        // New text goes where the old text sat in the drawing order, so it keeps its place in reading order.
-        int insertAt = analysis.Objects.FindIndex(rebuild.Contains);
+        // Where edits are made in the page's own instructions, new text is added at the end (PDFium adds
+        // without disturbing anything; putting it in the middle makes it write the page again) and the
+        // old text is taken out afterwards. Otherwise new text goes where the old text sat in the
+        // drawing order, so it keeps its place in reading order.
+        bool later = EditInstructionsDirectly;
+        int insertAt = later ? -1 : analysis.Objects.FindIndex(rebuild.Contains);
         IntPtr Draw(string text, StyleRef style, double x, double y)
         {
             var obj = DrawText(page, text, style, x, y, insertAt < 0 ? null : insertAt++);
             created.Add(obj);
+            page.NewObjects.Add(obj);
             return obj;
         }
         double newBottom = 0, minX = double.MaxValue, maxX = double.MinValue;
@@ -607,16 +612,25 @@ public sealed unsafe partial class PdfDocument
         bool offPage = newBottom > page.Height + 0.5;
         foreach (var obj in move)
         {
+            if (later)
+            {
+                if (ObjectBounds(page, obj).Bottom + dy > page.Height + 0.5) offPage = true;
+                page.MoveLater(obj, new Affine(1, 0, 0, 1, shiftUser.X, shiftUser.Y));
+                continue;
+            }
             TransformObject(obj, new Affine(1, 0, 0, 1, shiftUser.X, shiftUser.Y));
             if (ObjectBounds(page, obj).Bottom > page.Height + 0.5) offPage = true;
         }
         foreach (var obj in rebuild)
         {
+            if (later) { page.RemoveLater(obj); continue; }
             Native.FPDFPage_RemoveObject(page.Handle, obj);
             Native.FPDFPageObj_Destroy(obj);
         }
         int movedAnnotations = push ? MoveAnnotations(page, oldBounds.Bottom - 0.3 * em, footerTop, columnLeft, columnRight, shiftUser) : 0;
-        page.Dirty = page.ChangedExisting = true;
+        page.Dirty = true;
+        if (later) page.NewTakeThePlaceOfOld = true; // so the page still reads in the same order
+        else page.ChangedExisting = true;
         _charsByFont = null; // the document's text changed
 
         var bounds2 = lines.Count == 0

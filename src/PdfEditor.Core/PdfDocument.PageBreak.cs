@@ -54,7 +54,7 @@ public sealed unsafe partial class PdfDocument
         var created = Native.FPDFPage_New(Doc, pageIndex + 1, sideways ? newHeight : width, sideways ? width : newHeight);
         if (created == IntPtr.Zero) throw new PdfException("Could not add a page.");
         Native.FPDFPage_SetRotation(created, rotation);
-        using var next = new PageHandle(created, this) { Dirty = true, ChangedExisting = true };
+        using var next = new PageHandle(created, this, pageIndex + 1) { Dirty = true, ChangedExisting = true };
 
         // From this page's own coordinates, via what is seen on screen, to the new page's coordinates.
         // (The two pages need not share an origin, so this is more than a shift.)

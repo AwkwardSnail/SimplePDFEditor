@@ -584,4 +584,49 @@ public unsafe class PageInstructionsTests
         Assert.Equal((new PdfColor(200, 30, 30), 6.0, yellow), (style.Stroke, style.Width, style.Fill!.Value));
         Assert.Equal(5, AsPdfiumSeesIt(again, 0).Count);
     }
+    // ------------------------------------------------------------------ rewriting a paragraph
+
+    [Fact]
+    public void Rewriting_a_paragraph_leaves_the_rest_of_the_page_as_it_was_written()
+    {
+        // Two paragraphs with a heading between them, beside a CMYK square and a tiled pattern
+        // (both of which PDFium would turn into something else if it wrote the page again).
+        byte[] pdf = Page(
+            "0 1 1 0 k 230 230 40 40 re f /Pattern cs /P1 scn 230 170 40 40 re f 0 g " +
+            "BT /F1 10 Tf 12 TL 20 260 Td (The first paragraph has two lines) Tj T* (of plain words in it.) Tj ET " +
+            "BT /F1 14 Tf 20 215 Td (A heading) Tj ET " +
+            "BT /F1 10 Tf 12 TL 20 190 Td (The second paragraph follows the) Tj T* (heading and also has two lines.) Tj ET",
+            "/Font<</F1<</Type/Font/Subtype/Type1/BaseFont/Courier>>>>/Pattern<</P1 5 0 R>>",
+            Stream("/Type/Pattern/PatternType 1/PaintType 1/TilingType 1/BBox[0 0 10 10]/XStep 10/YStep 10/Resources<<>>", "1 0 0 rg 0 0 5 5 re f"));
+        using var doc = PdfDocument.Open(pdf);
+        var before = doc.GetParagraphs(0);
+        Assert.Equal(3, before.Count);
+        var picture = doc.Render(0, 1, false);
+        int direct = PdfDocument.DirectEdits, rewritten = PdfDocument.RewrittenEdits;
+
+        doc.ReplaceParagraphText(0, 0, "The first paragraph now says something else, a little longer than before, over three lines.");
+        Assert.Equal((direct + 1, rewritten), (PdfDocument.DirectEdits, PdfDocument.RewrittenEdits));
+
+        byte[] saved = doc.ToBytes();
+        using var again = PdfDocument.Open(saved);
+        var after = again.GetParagraphs(0);
+        // The same three paragraphs in the same order: the rewritten one is still first, not last.
+        Assert.Equal(3, after.Count);
+        Assert.StartsWith("The first paragraph now says", after[0].Text);
+        Assert.Equal("A heading", after[1].Text.Trim());
+        Assert.StartsWith("The second paragraph follows", after[2].Text);
+        Assert.True(after[0].LineCount >= 3);
+        // What lay below was pushed down by the extra line; nothing else moved.
+        Assert.True(after[1].Bounds.Y > before[1].Bounds.Y + 5, "the heading moved down");
+        Assert.Equal(after[1].Bounds.Y - before[1].Bounds.Y, after[2].Bounds.Y - before[2].Bounds.Y, 0.05);
+        // The square and the pattern are exactly as they were, on screen and in the file.
+        var now = again.Render(0, 1, false);
+        for (int y = 20; y < 140; y++)
+            for (int x = 225; x < 275; x++)
+                Assert.True(now.Pixels[y * now.Stride + x * 4] == picture.Pixels[y * picture.Stride + x * 4], $"pixel {x},{y} changed");
+        string file = PdfDocumentTests.Unpacked(saved);
+        Assert.Contains("0 1 1 0 k", file);
+        Assert.Contains("/Pattern cs /P1 scn", file);
+        Assert.DoesNotContain("two lines) Tj T* (of plain words", file); // the old words are gone from the file, not just hidden
+    }
 }

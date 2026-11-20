@@ -73,7 +73,11 @@ internal sealed record DrawState(
 /// <param name="StringAt">Where the text itself starts among the instruction's operands.</param>
 /// <param name="NextFollowsOn">The next piece of text starts where this one ends, with nothing setting the position in between.</param>
 /// <param name="ShiftBeforeNext">How far instructions between this piece and the next shift the writing position along the line.</param>
-internal sealed record TextState(Affine LineStart, double FontSize, double Stretch, double Rise, int Mode, int StringAt, bool NextFollowsOn = false, double ShiftBeforeNext = 0);
+internal sealed record TextState(Affine LineStart, double FontSize, double Stretch, double Rise, int Mode, int StringAt, bool NextFollowsOn = false, double ShiftBeforeNext = 0)
+{
+    /// <summary>The distance between lines in force (what the quote instructions move down by before showing).</summary>
+    public double Leading { get; init; }
+}
 
 /// <summary>
 /// The clip in force at some point of a page's instructions: nothing (no box, not complex), an
@@ -389,7 +393,7 @@ internal sealed class PageInstructions
             _items.Add(new DrawnItem(ItemKind.Text, start, _p, op, operatorAt, _space, false, _clip)
             {
                 State = _state, InTextBlock = _inText, Sections = _sections,
-                Text = new TextState(_lineStart, _fontSize, _stretch, _rise, _textMode, _stringAt >= start ? _stringAt : start),
+                Text = new TextState(_lineStart, _fontSize, _stretch, _rise, _textMode, _stringAt >= start ? _stringAt : start) { Leading = _leading },
             });
             _lastShown = _items.Count - 1;
             _shift = 0;

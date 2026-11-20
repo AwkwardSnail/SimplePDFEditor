@@ -55,6 +55,94 @@ internal static class InstructionEdits
     }
 
     /// <summary>
+    /// As <see cref="Apply"/>, and also: some items (new ones, which PDFium added at the end of
+    /// the page) are drawn just before another item instead, so that they take its place in the
+    /// order things are drawn and read in. Used when text is rewritten: the new text is added,
+    /// the old removed, and the new put where the old stood. When the new items cannot be put
+    /// there faithfully they stay where they are (at the end), and the other changes are still made.
+    /// </summary>
+    public static byte[]? ApplyAndPlace(PageInstructions page, IReadOnlyList<Change> changes, IReadOnlyList<int> place, int before, Facts facts)
+    {
+        var edits = new List<Edit>();
+        foreach (var change in changes)
+        {
+            if (EditFor(page, change, facts) is not { } edit) return null;
+            edits.Add(edit);
+        }
+        if (place.Count > 0 && before >= 0 && before < page.Items.Count && !place.Contains(before) && Placed(page, place, before, facts) is { } placing)
+            edits.AddRange(placing);
+        return Applied(page, edits);
+    }
+
+    /// <summary>The edits that take the given items out where they are and draw them just before another item; null when that cannot be done.</summary>
+    private static List<Edit>? Placed(PageInstructions page, IReadOnlyList<int> place, int before, Facts facts)
+    {
+        var target = page.Items[before];
+        if (target.State.CannotBeRepeated || target.InTextBlock && target.Kind != ItemKind.Text) return null;
+        var edits = new List<Edit>();
+        foreach (int index in place)
+        {
+            if (index < 0 || index >= page.Items.Count) return null;
+            var item = page.Items[index];
+            if (item.State.CannotBeRepeated || item.InTextBlock && item.Kind != ItemKind.Text) return null;
+            if (EditFor(page, new Change(index, null), facts) is not { } removal) return null;
+            edits.Add(removal);
+        }
+        string? Boxed(DrawState theirs, Affine space, Clip clip)
+        {
+            var sb = new StringBuilder();
+            foreach (int index in place)
+            {
+                var item = page.Items[index];
+                if (Alone(page, item, index, facts) is not { } drawn) return null;
+                if (SettingsFor(item, theirs, space, clip, facts.Bounds(index)) is not { } settings) return null;
+                sb.Append("q ").Append(settings).Append(drawn).Append(" Q ");
+            }
+            return sb.ToString();
+        }
+
+        if (Boxed(target.State, target.Space, target.Clip) is { } group)
+        {
+            if (target.Kind != ItemKind.Text)
+            {
+                edits.Add(new Edit(target.Start, target.Start, Encoding.Latin1.GetBytes(group)));
+                return edits;
+            }
+            // Before a piece of text: its block is closed, the items drawn, and a block opened again
+            // with everything as it stood just before the piece.
+            if (target.Text is not { } state || state.Mode >= 4 || facts.Placed(before) is not { } here) return null;
+            try
+            {
+                var sb = new StringBuilder("ET ").Append(group).Append("BT ");
+                if (target.Operator is "'" or "\"")
+                {
+                    // The quote first moves down a line: before it, the line started one line higher.
+                    sb.Append(Matrix(Affine.Concat(new Affine(1, 0, 0, 1, 0, state.Leading), state.LineStart))).Append(" Tm ");
+                }
+                else
+                {
+                    sb.Append(Matrix(state.LineStart)).Append(" Tm ");
+                    if (Along(Position(target, state, here), state.LineStart, state) is not { } along) return null;
+                    sb.Append(Shift(along, state));
+                }
+                edits.Add(new Edit(target.Start, target.Start, Encoding.Latin1.GetBytes(sb.ToString())));
+                return edits;
+            }
+            catch (PdfException) { return null; }
+        }
+        // Not there (a clip the items would be cut by): just before the saved-state section it is drawn in.
+        foreach (var section in target.Sections.Reverse())
+        {
+            if (section.InTextBlock || section.End < 0) continue;
+            if (place.Any(i => page.Items[i].Start >= section.Start && page.Items[i].End <= section.End)) continue;
+            if (Boxed(section.State, section.Space, section.Clip) is not { } outside) continue;
+            edits.Add(new Edit(section.Start, section.Start, Encoding.Latin1.GetBytes(outside)));
+            return edits;
+        }
+        return null;
+    }
+
+    /// <summary>
     /// An item moved to a place where the clip it is drawn under would cut it. It is taken out
     /// where it is and drawn just after the nearest saved-state section whose surroundings leave
     /// it whole, in a box in which its space, its clips and its settings are given again, all
