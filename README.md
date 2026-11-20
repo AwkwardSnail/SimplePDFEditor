@@ -1,6 +1,6 @@
 # SimplePDF Editor
 
-A PDF editor for Windows by [Awkward Snail](https://awkwardsnail.com.au): add and rearrange pages, edit and add text and pictures, highlight and comment. It works offline, collects no data and never goes online.
+A PDF editor for Windows by [Awkward Snail](https://awkwardsnail.com.au): add and rearrange pages, edit and add text and pictures, draw shapes, highlight and comment, and save a copy as RTF for a word processor. It works offline, collects no data and never goes online.
 
 ## Layout
 
@@ -35,7 +35,8 @@ Paragraph indices are valid until the page changes, so read the paragraphs again
 - Position, width, alignment (left, centre, right, justified), first-line indent, list-item hanging indent and line spacing.
 - Formatting of the text that survives an edit: bold or italic words, colours, sizes, superscripts. New text takes the formatting around it.
 - The original embedded fonts. Embedded fonts usually hold only the letters the document already uses; any other letter is drawn in a look-alike font (a standard PDF font of the same family, or an installed font for accents and other scripts), and the result says so.
-- Everything else on the page. When the paragraph grows or shrinks, content below it in the same column (text, images, highlights and comments) moves with it; the other columns and the footer area stay put.
+- Everything else on the page. When the paragraph grows or shrinks, content below it in the same column (text, images, highlights and comments) moves with it; the other columns and the footer area stay put. On a page laid out in boxes or tables (a box or panel holds the paragraph and room below it, or a rule or shading reaches past the column over text that would not move with it), moving part of the page would tear the layout apart: there the paragraph changes in place, nothing else moves, and the result says so (`LeftInPlace`).
+- The letter spacing the paragraph was set with. Publishers often set type a little tighter than its font does; the spacing is measured, used when wrapping, and written into the new text, so a rewritten paragraph is no looser than the text around it and does not grow a line for that reason. A paragraph that keeps its number of lines puts each line back exactly where it was.
 
 **How paragraphs are found**
 
@@ -45,7 +46,7 @@ Lines are grouped into a paragraph when they share a text size and the page's us
 
 - Detection is a judgement made from positions. Unusual layouts (tables, text in shapes, multi-column text drawn out of order) may be grouped differently from how they look.
 - A forced line break inside a paragraph is drawn, but the PDF does not record it, so reading the page back gives one paragraph of two lines.
-- Re-written lines use the font's normal letter spacing; fine kerning from the original is not kept for those lines.
+- Re-written lines keep the paragraph's overall letter spacing, but not the fine kerning between particular pairs of letters.
 - Text that runs past the bottom of the page is reported (`RunsOffPage`), not moved to the next page.
 - Right-to-left scripts, vertical text and text inside form XObjects are not re-flowed.
 
@@ -73,6 +74,17 @@ existing.ImportRtf("appendix.rtf", index: 3);                         // or inse
 
 Line breaks are worked out by this library, so they can differ slightly from the word processor's.
 
+## Saving as RTF
+
+`ExportRtf` writes the document for a word processor: its paragraphs with their fonts, sizes, bold, italic, colour and alignment, its pictures where they come in the text, and a new page (or a new section, where the page size changes) for each page. In the editor it is a file type in **Save As**; the PDF being edited stays as it is.
+
+```csharp
+byte[] rtf = doc.ExportRtf(out var result);   // result says how much was written and what was left out
+File.WriteAllBytes("notes.rtf", rtf);
+```
+
+A PDF fixes where everything stands and RTF lets text run on, so exact positions, columns, drawn shapes, comments and highlights are not kept. Pictures are stored without loss (PNG), so a file with many pictures is large.
+
 ## Running the editor (Windows)
 
 Needs the .NET 8 SDK (or Visual Studio 2022 with the ".NET desktop development" workload).
@@ -93,15 +105,17 @@ or open `PdfEditor.sln` in Visual Studio and run `PdfEditor.App`. A PDF path on 
 | **Comment** | Click where the comment should go and type it. Comments and highlights are listed on the right. |
 | **Image** | Pick an image file; it is placed in the middle of the page, ready to drag and resize. |
 
-Vector drawings (shapes that sit together) are selected, moved and deleted as one item. A click on something inside a group (a header or logo block stored as one unit) takes the group apart so its parts can be selected; where the group's text cannot safely stay text, it becomes shapes that look the same.
+A click on a drawing goes by what is actually drawn at that point, the topmost first: a shape's filling or its line, not the box around it. Empty space inside a figure, or inside a box with no filling, picks the smallest drawing around the point. Shapes that touch are one figure, selected, moved and deleted together; right-click a figure and choose **Ungroup** to pick, fill or move each of its shapes on its own, or drag a box round several shapes and choose **Group** to join them. A shape just drawn starts on its own. Grouping is remembered while the document is open (a PDF keeps no groups). A click on something inside a stored group (a header or logo block stored as one unit) takes the group apart so its parts can be selected; where the group's text cannot safely stay text, it becomes shapes that look the same.
 
-Scrolling past the end of a page carries on to the next page. The page list on the left can be resized by dragging its edge, and pages reordered by dragging them: a line shows where the page will land. The comments panel on the right can be hidden with the button on its edge.
+The view scrolls on from page to page: the page being worked on has the page before it above and the page after it below, and the page that reaches the middle of the view becomes the one being worked on. The zoom buttons sit on a slim bar right above the page. The page list on the left can be resized by dragging its edge, and pages reordered by dragging them: a line shows where the page will land. The comments panel on the right can be hidden with the button on its edge.
 
 **Drawing**: the Line, Arrow, Box, Circle and Spline tools draw vector shapes, sharp at any size, in the chosen line colour and thickness. Drag for a line, arrow, box or circle; Shift keeps a line level, upright or at 45 degrees, a box square and a circle round. For a spline, click point after point and the curve passes smoothly through each; double-click or Enter finishes, Esc cancels. Fill sets whether new boxes, circles and splines are filled or see-through. Right-click any drawing for **Filling...** (a colour, or none for see-through; lines and arrows take no filling), **Line...** (colour and thickness) or Delete. Drawn shapes are selected, moved and deleted with the Select tool like any other item.
 
-**Blocks of text**: with Select, drag from empty paper to draw a box; every piece of text it touches is selected as one block, which moves and deletes together. A press inside the block moves it. **Right-click text** (one piece or a block) for **Font and colour...** (sans, serif or mono; size; bold; italic; colour: only what is changed in the dialog is applied), **Rotate right** and **Rotate left** (a quarter turn about the middle of the block), the layer moves and Delete. A change of font, bold or italic sets the text in a standard font, since a document's own fonts rarely hold the letters for another weight; a change of colour alone keeps the font. Turned text can still be moved, turned back and deleted, but not rewritten in place.
+**Blocks of text**: with Select, drag from empty paper to draw a box; every piece of text it touches is selected as one block, which moves and deletes together. A press inside the block moves it. **Right-click text** (one piece or a block) for **Font and colour...** (sans, serif or mono; size; bold; italic; colour: only what is changed in the dialog is applied), **Rotate right** and **Rotate left** (a quarter turn about the middle of the block), the layer moves and Delete. A change of font, bold or italic sets the text in a standard font, since a document's own fonts rarely hold the letters for another weight; a change of colour alone keeps the font. Turned text can still be moved, turned back, deleted, and rewritten a piece at a time (the editing box is turned the same way).
 
 **Layers**: the right-click menu of a drawing, a picture or a piece of text has **Move one layer up** and **Move one layer down**. The item passes the nearest item it overlaps, so each step changes what is seen; when nothing overlaps it that way, it is at the front or back already. The move is made in the page's own instructions (see "Editing a page's instructions directly"), so it works for every kind of item, groups, gradients and clipped items included, and changes nothing else on the page. Only where that cannot be done is the older way used: PDFium keeps existing content in the order it was first written and only honours the place of new objects, so the item is replaced by a fresh copy of itself in its new place, which groups, gradients and items clipped to a shape do not allow.
+
+**Comments and highlights** can be dragged like anything else. Right-click one to change its comment, move it one layer up or down, or delete it. They always lie over the page itself; the layer moves order them among themselves.
 
 **Watermark** writes a word or two (DRAFT, COPY, a name) large and see-through across the middle of this page or every page, corner to corner or level, in a chosen colour and strength. It is ordinary text: click it with Select and press Delete to take it off. Because it lies across the page, a click picks it only where nothing else is.
 
@@ -182,3 +196,6 @@ The app builds on work by others, each under its own licence:
 - [PDFium](https://pdfium.googlesource.com/pdfium/) (BSD 3-Clause and Apache 2.0), through the `bblanchon.PDFium` packages.
 - [StbImageSharp](https://github.com/StbSharp/StbImageSharp) (public domain) for reading image files.
 - Atkinson Hyperlegible Next (SIL Open Font Licence 1.1, `src/PdfEditor.App/Fonts/OFL.txt`) for the app's own text.
+- The .NET runtime (MIT), which the Store package carries so that nothing else needs installing.
+
+`src/PdfEditor.App/THIRD-PARTY-NOTICES.txt` holds these notices and ships with the app.
