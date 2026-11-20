@@ -207,6 +207,20 @@ public partial class PdfEditorControl : UserControl
         }
     }
 
+    /// <summary>
+    /// Keeps the zoom buttons in the middle of their row, over the page, while the tools before
+    /// them and the drawing tools after them still fit on the one line. In a narrower window they
+    /// simply follow the tools, and the row wraps as it always did.
+    /// </summary>
+    private void ToolsRow_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        const double gap = 14; // the space after every group (see the Group style)
+        double row = ToolsRow.ActualWidth, tools = ToolsGroup.ActualWidth + gap, zoom = ZoomGroup.ActualWidth, draw = DrawGroup.ActualWidth + gap;
+        double before = Math.Floor((row - zoom) / 2 - tools);
+        if (before < 0 || tools + before + zoom + gap + draw > row) before = 0;
+        if (Math.Abs(ZoomGroup.Margin.Left - before) > 0.5) ZoomGroup.Margin = new Thickness(before, 0, gap, 5);
+    }
+
     private void ShowError(string what, Exception e) =>
         MessageBox.Show(Window.GetWindow(this), what + "\n\n" + e.Message, "SimplePDF Editor", MessageBoxButton.OK, MessageBoxImage.Warning);
 

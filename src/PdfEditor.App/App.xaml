@@ -20,7 +20,7 @@
       <Setter Property="Background" Value="{StaticResource BgBrush}"/>
       <Setter Property="Foreground" Value="{StaticResource GreenBrush}"/>
       <Setter Property="FontFamily" Value="{StaticResource UiFont}"/>
-      <Setter Property="FontSize" Value="13"/>
+      <Setter Property="FontSize" Value="15.5"/>
     </Style>
 
     <!-- Buttons -->
@@ -401,7 +401,7 @@
     <Style TargetType="ContextMenu">
       <Setter Property="Foreground" Value="{StaticResource GreenBrush}"/>
       <Setter Property="FontFamily" Value="{StaticResource UiFont}"/>
-      <Setter Property="FontSize" Value="13"/>
+      <Setter Property="FontSize" Value="15.5"/>
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="ContextMenu">
@@ -447,7 +447,7 @@
     <Style TargetType="ToolTip">
       <Setter Property="Foreground" Value="{StaticResource GreenBrush}"/>
       <Setter Property="FontFamily" Value="{StaticResource UiFont}"/>
-      <Setter Property="FontSize" Value="12.5"/>
+      <Setter Property="FontSize" Value="14.5"/>
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="ToolTip">

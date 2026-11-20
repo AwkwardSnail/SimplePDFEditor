@@ -16,75 +16,90 @@
                 <Style TargetType="ComboBox" BasedOn="{StaticResource {x:Type ComboBox}}">
                     <Setter Property="Margin" Value="0,0,4,0" />
                 </Style>
+                <!-- A picture beside each word: Windows' own symbol font, and small drawn shapes for the drawing tools. -->
+                <Style x:Key="Icon" TargetType="TextBlock">
+                    <Setter Property="FontFamily" Value="Segoe Fluent Icons, Segoe MDL2 Assets" />
+                    <Setter Property="FontSize" Value="16" />
+                    <Setter Property="Margin" Value="0,0,6,0" />
+                    <Setter Property="VerticalAlignment" Value="Center" />
+                </Style>
+                <Style x:Key="ShapeIcon" TargetType="Path">
+                    <Setter Property="Width" Value="16" />
+                    <Setter Property="Height" Value="16" />
+                    <Setter Property="Margin" Value="0,0,6,0" />
+                    <Setter Property="StrokeThickness" Value="1.5" />
+                    <Setter Property="VerticalAlignment" Value="Center" />
+                    <Setter Property="Stroke" Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Control}}" />
+                </Style>
                 <Style x:Key="Group" TargetType="StackPanel">
                     <Setter Property="Orientation" Value="Horizontal" />
                     <Setter Property="Margin" Value="0,0,14,5" />
                 </Style>
             </Border.Resources>
+            <StackPanel>
+            <!-- Row 1: the file, and its pages. -->
             <WrapPanel>
             <StackPanel Style="{StaticResource Group}">
-                <Button Content="New" Click="New_Click" ToolTip="New document" />
-                <Button Content="Open" Click="Open_Click" ToolTip="Open a PDF (Ctrl+O)" />
-                <Button x:Name="SaveButton" Content="Save" Click="Save_Click" ToolTip="Save (Ctrl+S)" />
-                <Button Content="Save As" Click="SaveAs_Click" ToolTip="Save under a new name (Ctrl+Shift+S)" />
+                <Button Click="New_Click" ToolTip="New document (Ctrl+N)"><StackPanel Orientation="Horizontal"><TextBlock Style="{StaticResource Icon}" Text="&#xE7C3;" /><TextBlock Text="New" VerticalAlignment="Center" /></StackPanel></Button>
+                <Button Click="Open_Click" ToolTip="Open a PDF (Ctrl+O)"><StackPanel Orientation="Horizontal"><TextBlock Style="{StaticResource Icon}" Text="&#xE8E5;" /><TextBlock Text="Open" VerticalAlignment="Center" /></StackPanel></Button>
+                <Button x:Name="SaveButton" Click="Save_Click" ToolTip="Save (Ctrl+S)"><StackPanel Orientation="Horizontal"><TextBlock Style="{StaticResource Icon}" Text="&#xE74E;" /><TextBlock Text="Save" VerticalAlignment="Center" /></StackPanel></Button>
+                <Button Click="SaveAs_Click" ToolTip="Save under a new name (Ctrl+Shift+S)"><StackPanel Orientation="Horizontal"><TextBlock Style="{StaticResource Icon}" Text="&#xE792;" /><TextBlock Text="Save As" VerticalAlignment="Center" /></StackPanel></Button>
                 <Border Style="{DynamicResource ToolSeparator}" />
-                <Button x:Name="UndoButton" Content="Undo" Click="Undo_Click" ToolTip="Undo (Ctrl+Z)" />
-                <Button x:Name="RedoButton" Content="Redo" Click="Redo_Click" ToolTip="Redo (Ctrl+Y)" />
+                <Button x:Name="UndoButton" Click="Undo_Click" ToolTip="Undo (Ctrl+Z)"><StackPanel Orientation="Horizontal"><TextBlock Style="{StaticResource Icon}" Text="&#xE7A7;" /><TextBlock Text="Undo" VerticalAlignment="Center" /></StackPanel></Button>
+                <Button x:Name="RedoButton" Click="Redo_Click" ToolTip="Redo (Ctrl+Y)"><StackPanel Orientation="Horizontal"><TextBlock Style="{StaticResource Icon}" Text="&#xE7A6;" /><TextBlock Text="Redo" VerticalAlignment="Center" /></StackPanel></Button>
             </StackPanel>
             <StackPanel Style="{StaticResource Group}">
-                <Button Content="Add page" Click="AddPage_Click" ToolTip="Add a blank page after this one. Asks for its size; hold Shift to be asked again once a size is kept" />
-                <Button Content="Page break" Click="PageBreak_Click" ToolTip="Break this page in two. With an item selected, it and everything below it move to a new page; with nothing selected, a line follows the mouse and a click breaks the page there" />
-                <Button Content="Insert file" Click="InsertFile_Click" ToolTip="Insert the pages of a PDF, or an RTF document laid out as pages, after this page" />
-                <Button x:Name="DeletePageButton" Content="Delete page" Click="DeletePage_Click" ToolTip="Delete this page" />
-                <Button Content="Rotate" Click="Rotate_Click" ToolTip="Rotate this page a quarter turn clockwise" />
-                <Button x:Name="PageUpButton" Content="Move up" Click="MovePageUp_Click" ToolTip="Move this page earlier" />
-                <Button x:Name="PageDownButton" Content="Move down" Click="MovePageDown_Click" ToolTip="Move this page later" />
-                <Button Content="Print as tiles" Click="PrintAsTiles_Click" ToolTip="Save this page spread over several sheets of paper, to print and join into a poster. The document is not changed" />
+                <TextBlock Text="Pages:" VerticalAlignment="Center" Margin="4,0" />
+                <Button Click="AddPage_Click" ToolTip="Add page: a blank page after this one. Asks for its size; hold Shift to be asked again once a size is kept"><StackPanel Orientation="Horizontal"><TextBlock Style="{StaticResource Icon}" Text="&#xE710;" /><TextBlock Text="Add" VerticalAlignment="Center" /></StackPanel></Button>
+                <Button Click="PageBreak_Click" ToolTip="Page break: break this page in two. With an item selected, it and everything below it move to a new page; with nothing selected, a line follows the mouse and a click breaks the page there"><StackPanel Orientation="Horizontal"><TextBlock Style="{StaticResource Icon}" Text="&#xE8C6;" /><TextBlock Text="Break" VerticalAlignment="Center" /></StackPanel></Button>
+                <Button Click="InsertFile_Click" ToolTip="Insert file: the pages of a PDF, or an RTF document laid out as pages, after this page"><StackPanel Orientation="Horizontal"><TextBlock Style="{StaticResource Icon}" Text="&#xE8B5;" /><TextBlock Text="Insert" VerticalAlignment="Center" /></StackPanel></Button>
+                <Button x:Name="DeletePageButton" Click="DeletePage_Click" ToolTip="Delete this page"><StackPanel Orientation="Horizontal"><TextBlock Style="{StaticResource Icon}" Text="&#xE74D;" /><TextBlock Text="Delete" VerticalAlignment="Center" /></StackPanel></Button>
+                <Button Click="Rotate_Click" ToolTip="Rotate this page a quarter turn clockwise"><StackPanel Orientation="Horizontal"><TextBlock Style="{StaticResource Icon}" Text="&#xE7AD;" /><TextBlock Text="Rotate" VerticalAlignment="Center" /></StackPanel></Button>
+                <Button x:Name="PageUpButton" Click="MovePageUp_Click" ToolTip="Move this page earlier"><StackPanel Orientation="Horizontal"><TextBlock Style="{StaticResource Icon}" Text="&#xE74A;" /><TextBlock Text="Up" VerticalAlignment="Center" /></StackPanel></Button>
+                <Button x:Name="PageDownButton" Click="MovePageDown_Click" ToolTip="Move this page later"><StackPanel Orientation="Horizontal"><TextBlock Style="{StaticResource Icon}" Text="&#xE74B;" /><TextBlock Text="Down" VerticalAlignment="Center" /></StackPanel></Button>
+                <Button Click="PrintAsTiles_Click" ToolTip="Print as tiles: save this page spread over several sheets of paper, to print and join into a poster. The document is not changed"><StackPanel Orientation="Horizontal"><TextBlock Style="{StaticResource Icon}" Text="&#xE80A;" /><TextBlock Text="Tiles" VerticalAlignment="Center" /></StackPanel></Button>
             </StackPanel>
-            <StackPanel Style="{StaticResource Group}">
-                <Button Content="-" Width="26" Padding="0" Click="ZoomOut_Click" ToolTip="Zoom out (Ctrl+-)" />
-                <TextBlock x:Name="ZoomText" Width="44" TextAlignment="Center" VerticalAlignment="Center" Margin="0,0,4,0" />
-                <Button Content="+" Width="26" Padding="0" Click="ZoomIn_Click" ToolTip="Zoom in (Ctrl++)" />
-                <Button Content="Fit width" Click="FitWidth_Click" />
-            </StackPanel>
-            <StackPanel Style="{StaticResource Group}">
-                <RadioButton x:Name="SelectTool" Style="{DynamicResource ToolRadio}" GroupName="Tool" Content="Select" Tag="Select" IsChecked="True" Checked="Tool_Checked"
-                             ToolTip="Click to select, drag to move, double-click text to edit it, Delete to remove" />
-                <RadioButton Style="{DynamicResource ToolRadio}" GroupName="Tool" Content="Text" Tag="Text" Checked="Tool_Checked" ToolTip="Click on the page to type new text" />
-                <RadioButton Style="{DynamicResource ToolRadio}" GroupName="Tool" Content="Highlight" Tag="Highlight" Checked="Tool_Checked" ToolTip="Drag across text to highlight it" />
-                <RadioButton Style="{DynamicResource ToolRadio}" GroupName="Tool" Content="Comment" Tag="Comment" Checked="Tool_Checked" ToolTip="Click on the page to leave a comment" />
-                <Button Content="Image" Click="AddImage_Click" ToolTip="Place an image on this page" />
-                <Button Content="Watermark" Click="Watermark_Click" ToolTip="Write a word such as DRAFT large and see-through across this page, or every page" />
+            </WrapPanel>
+
+            <!-- Row 2: the tools, with the zoom in the middle (see CentreZoom), close to the page. -->
+            <WrapPanel x:Name="ToolsRow" SizeChanged="ToolsRow_SizeChanged">
+            <StackPanel x:Name="ToolsGroup" Style="{StaticResource Group}">
+                <RadioButton x:Name="SelectTool" Style="{DynamicResource ToolRadio}" GroupName="Tool" Tag="Select" IsChecked="True" Checked="Tool_Checked"
+                             ToolTip="Click to select, drag to move, double-click text to edit it, Delete to remove"><StackPanel Orientation="Horizontal"><TextBlock Style="{StaticResource Icon}" Text="&#xE8B0;" /><TextBlock Text="Select" VerticalAlignment="Center" /></StackPanel></RadioButton>
+                <RadioButton Style="{DynamicResource ToolRadio}" GroupName="Tool" Tag="Text" Checked="Tool_Checked" ToolTip="Click on the page to type new text"><StackPanel Orientation="Horizontal"><TextBlock Style="{StaticResource Icon}" Text="&#xE8D2;" /><TextBlock Text="Text" VerticalAlignment="Center" /></StackPanel></RadioButton>
+                <RadioButton Style="{DynamicResource ToolRadio}" GroupName="Tool" Tag="Highlight" Checked="Tool_Checked" ToolTip="Drag across text to highlight it"><StackPanel Orientation="Horizontal"><TextBlock Style="{StaticResource Icon}" Text="&#xE7E6;" /><TextBlock Text="Highlight" VerticalAlignment="Center" /></StackPanel></RadioButton>
+                <RadioButton Style="{DynamicResource ToolRadio}" GroupName="Tool" Tag="Comment" Checked="Tool_Checked" ToolTip="Click on the page to leave a comment"><StackPanel Orientation="Horizontal"><TextBlock Style="{StaticResource Icon}" Text="&#xE90A;" /><TextBlock Text="Comment" VerticalAlignment="Center" /></StackPanel></RadioButton>
+                <Button Click="AddImage_Click" ToolTip="Place an image on this page"><StackPanel Orientation="Horizontal"><TextBlock Style="{StaticResource Icon}" Text="&#xEB9F;" /><TextBlock Text="Image" VerticalAlignment="Center" /></StackPanel></Button>
+                <Button Click="Watermark_Click" ToolTip="Write a word such as DRAFT large and see-through across this page, or every page"><StackPanel Orientation="Horizontal"><TextBlock Style="{StaticResource Icon}" Text="&#xE8D3;" /><TextBlock Text="Watermark" VerticalAlignment="Center" /></StackPanel></Button>
                 <Border Style="{DynamicResource ToolSeparator}" />
-                <Button Content="Find &amp; replace" Click="FindReplace_Click" ToolTip="Replace text throughout the document; changed paragraphs re-flow (Ctrl+H)" />
+                <Button Click="FindReplace_Click" ToolTip="Find and replace text throughout the document; changed paragraphs re-flow (Ctrl+H)"><StackPanel Orientation="Horizontal"><TextBlock Style="{StaticResource Icon}" Text="&#xE721;" /><TextBlock Text="Find" VerticalAlignment="Center" /></StackPanel></Button>
             </StackPanel>
-            <StackPanel Style="{StaticResource Group}">
+            <StackPanel x:Name="ZoomGroup" Style="{StaticResource Group}">
+                <Button Width="34" Padding="0" Click="ZoomOut_Click" ToolTip="Zoom out (Ctrl+-)"><TextBlock Style="{StaticResource Icon}" Margin="0" Text="&#xE71F;" /></Button>
+                <TextBlock x:Name="ZoomText" Width="52" TextAlignment="Center" VerticalAlignment="Center" Margin="0,0,4,0" />
+                <Button Width="34" Padding="0" Click="ZoomIn_Click" ToolTip="Zoom in (Ctrl++)"><TextBlock Style="{StaticResource Icon}" Margin="0" Text="&#xE8A3;" /></Button>
+                <Button Click="FitWidth_Click" ToolTip="Make the page as wide as the room for it"><StackPanel Orientation="Horizontal"><TextBlock Style="{StaticResource Icon}" Text="&#xE9A6;" /><TextBlock Text="Fit width" VerticalAlignment="Center" /></StackPanel></Button>
+            </StackPanel>
+            <StackPanel x:Name="DrawGroup" Style="{StaticResource Group}">
                 <TextBlock Text="Draw:" VerticalAlignment="Center" Margin="4,0" />
-                <RadioButton Style="{DynamicResource ToolRadio}" GroupName="Tool" Content="Line" Tag="Line" Checked="Tool_Checked" ToolTip="Drag to draw a straight line. Shift keeps it level, upright or at 45 degrees" />
-                <RadioButton Style="{DynamicResource ToolRadio}" GroupName="Tool" Content="Arrow" Tag="Arrow" Checked="Tool_Checked" ToolTip="Drag to draw an arrow; it points where the drag ends" />
-                <RadioButton Style="{DynamicResource ToolRadio}" GroupName="Tool" Content="Box" Tag="Box" Checked="Tool_Checked" ToolTip="Drag to draw a box. Shift makes it square" />
-                <RadioButton Style="{DynamicResource ToolRadio}" GroupName="Tool" Content="Circle" Tag="Circle" Checked="Tool_Checked" ToolTip="Drag to draw a circle or oval. Shift keeps it round" />
-                <RadioButton Style="{DynamicResource ToolRadio}" GroupName="Tool" Content="Spline" Tag="Spline" Checked="Tool_Checked" ToolTip="Click point after point to draw a smooth curve through them; double-click or Enter finishes, Esc cancels" />
-                <Border Style="{DynamicResource ToolSeparator}" />
-                <ComboBox x:Name="LineColourBox" Width="90" ToolTip="Line colour for new shapes" />
-                <ComboBox x:Name="LineWidthBox" Width="68" SelectedIndex="1" ToolTip="Line thickness for new shapes, in points">
-                    <ComboBoxItem Content="1 pt" Tag="1" />
-                    <ComboBoxItem Content="2 pt" Tag="2" />
-                    <ComboBoxItem Content="3 pt" Tag="3" />
-                    <ComboBoxItem Content="5 pt" Tag="5" />
-                    <ComboBoxItem Content="8 pt" Tag="8" />
-                </ComboBox>
-                <TextBlock Text="Fill:" VerticalAlignment="Center" Margin="6,0,4,0" />
-                <ComboBox x:Name="FillBox" Width="90" ToolTip="Fill for new boxes, circles and splines. None leaves them see-through" />
+                <RadioButton Style="{DynamicResource ToolRadio}" GroupName="Tool" Tag="Line" Checked="Tool_Checked" ToolTip="Drag to draw a straight line. Shift keeps it level, upright or at 45 degrees"><StackPanel Orientation="Horizontal"><Path Style="{StaticResource ShapeIcon}" Data="M2,14 L14,2" /><TextBlock Text="Line" VerticalAlignment="Center" /></StackPanel></RadioButton>
+                <RadioButton Style="{DynamicResource ToolRadio}" GroupName="Tool" Tag="Arrow" Checked="Tool_Checked" ToolTip="Drag to draw an arrow; it points where the drag ends"><StackPanel Orientation="Horizontal"><Path Style="{StaticResource ShapeIcon}" Data="M2,14 L14,2 M7,2 L14,2 L14,9" /><TextBlock Text="Arrow" VerticalAlignment="Center" /></StackPanel></RadioButton>
+                <RadioButton Style="{DynamicResource ToolRadio}" GroupName="Tool" Tag="Box" Checked="Tool_Checked" ToolTip="Drag to draw a box. Shift makes it square"><StackPanel Orientation="Horizontal"><Path Style="{StaticResource ShapeIcon}" Data="M2,3 H14 V13 H2 Z" /><TextBlock Text="Box" VerticalAlignment="Center" /></StackPanel></RadioButton>
+                <RadioButton Style="{DynamicResource ToolRadio}" GroupName="Tool" Tag="Circle" Checked="Tool_Checked" ToolTip="Drag to draw a circle or oval. Shift keeps it round"><StackPanel Orientation="Horizontal"><Path Style="{StaticResource ShapeIcon}" Data="M8,2 A6,6 0 1 1 7.99,2 Z" /><TextBlock Text="Circle" VerticalAlignment="Center" /></StackPanel></RadioButton>
+                <RadioButton Style="{DynamicResource ToolRadio}" GroupName="Tool" Tag="Spline" Checked="Tool_Checked" ToolTip="Click point after point to draw a smooth curve through them; double-click or Enter finishes, Esc cancels"><StackPanel Orientation="Horizontal"><Path Style="{StaticResource ShapeIcon}" Data="M2,12 C5,0 9,16 14,4" /><TextBlock Text="Spline" VerticalAlignment="Center" /></StackPanel></RadioButton>
             </StackPanel>
+            </WrapPanel>
+
+            <!-- Row 3: how new text, shapes and highlights look, and the selected paragraph's alignment. -->
+            <WrapPanel>
             <StackPanel Style="{StaticResource Group}">
                 <TextBlock Text="Text:" VerticalAlignment="Center" Margin="4,0" />
-                <ComboBox x:Name="FontBox" Width="80" SelectedIndex="0" ToolTip="Font for new text">
+                <ComboBox x:Name="FontBox" Width="88" SelectedIndex="0" ToolTip="Font for new text">
                     <ComboBoxItem Content="Sans" />
                     <ComboBoxItem Content="Serif" />
                     <ComboBoxItem Content="Mono" />
                 </ComboBox>
-                <ComboBox x:Name="SizeBox" Width="56" IsEditable="True" Text="12" ToolTip="Font size in points">
+                <ComboBox x:Name="SizeBox" Width="62" IsEditable="True" Text="12" ToolTip="Font size in points">
                     <ComboBoxItem Content="8" />
                     <ComboBoxItem Content="10" />
                     <ComboBoxItem Content="12" />
@@ -94,21 +109,36 @@
                     <ComboBoxItem Content="36" />
                     <ComboBoxItem Content="48" />
                 </ComboBox>
-                <ToggleButton x:Name="BoldButton" Content="B" FontWeight="Bold" Width="28" Padding="0" ToolTip="Bold" />
-                <ToggleButton x:Name="ItalicButton" Content="I" FontStyle="Italic" Width="28" Padding="0" ToolTip="Italic" />
-                <ComboBox x:Name="ColorBox" Width="90" ToolTip="Text colour" />
-                <Border Style="{DynamicResource ToolSeparator}" />
-                <TextBlock Text="Highlight:" VerticalAlignment="Center" Margin="4,0" />
-                <ComboBox x:Name="HighlightBox" Width="90" ToolTip="Highlight colour" />
+                <ToggleButton x:Name="BoldButton" Content="B" FontWeight="Bold" Width="32" Padding="0" ToolTip="Bold" />
+                <ToggleButton x:Name="ItalicButton" Content="I" FontStyle="Italic" Width="32" Padding="0" ToolTip="Italic" />
+                <ComboBox x:Name="ColorBox" Width="104" ToolTip="Text colour" />
             </StackPanel>
             <StackPanel Style="{StaticResource Group}">
                 <TextBlock Text="Paragraph:" VerticalAlignment="Center" Margin="4,0" />
-                <Button Content="Left" Tag="Left" Click="Align_Click" ToolTip="Align the selected paragraph left" />
-                <Button Content="Centre" Tag="Center" Click="Align_Click" ToolTip="Centre the selected paragraph" />
-                <Button Content="Right" Tag="Right" Click="Align_Click" ToolTip="Align the selected paragraph right" />
-                <Button Content="Justify" Tag="Justify" Click="Align_Click" ToolTip="Justify the selected paragraph" />
+                <Button Tag="Left" Click="Align_Click" ToolTip="Align the selected paragraph left"><StackPanel Orientation="Horizontal"><TextBlock Style="{StaticResource Icon}" Text="&#xE8E4;" /><TextBlock Text="Left" VerticalAlignment="Center" /></StackPanel></Button>
+                <Button Tag="Center" Click="Align_Click" ToolTip="Centre the selected paragraph"><StackPanel Orientation="Horizontal"><TextBlock Style="{StaticResource Icon}" Text="&#xE8E3;" /><TextBlock Text="Centre" VerticalAlignment="Center" /></StackPanel></Button>
+                <Button Tag="Right" Click="Align_Click" ToolTip="Align the selected paragraph right"><StackPanel Orientation="Horizontal"><TextBlock Style="{StaticResource Icon}" Text="&#xE8E2;" /><TextBlock Text="Right" VerticalAlignment="Center" /></StackPanel></Button>
+                <Button Tag="Justify" Click="Align_Click" ToolTip="Justify the selected paragraph"><StackPanel Orientation="Horizontal"><TextBlock Style="{StaticResource Icon}" Text="&#xE8FD;" /><TextBlock Text="Justify" VerticalAlignment="Center" /></StackPanel></Button>
+            </StackPanel>
+            <StackPanel Style="{StaticResource Group}">
+                <TextBlock Text="Shapes:" VerticalAlignment="Center" Margin="4,0" />
+                <ComboBox x:Name="LineColourBox" Width="104" ToolTip="Line colour for new shapes" />
+                <ComboBox x:Name="LineWidthBox" Width="76" SelectedIndex="1" ToolTip="Line thickness for new shapes, in points">
+                    <ComboBoxItem Content="1 pt" Tag="1" />
+                    <ComboBoxItem Content="2 pt" Tag="2" />
+                    <ComboBoxItem Content="3 pt" Tag="3" />
+                    <ComboBoxItem Content="5 pt" Tag="5" />
+                    <ComboBoxItem Content="8 pt" Tag="8" />
+                </ComboBox>
+                <TextBlock Text="Fill:" VerticalAlignment="Center" Margin="6,0,4,0" />
+                <ComboBox x:Name="FillBox" Width="104" ToolTip="Fill for new boxes, circles and splines. None leaves them see-through" />
+            </StackPanel>
+            <StackPanel Style="{StaticResource Group}">
+                <TextBlock Text="Highlight:" VerticalAlignment="Center" Margin="4,0" />
+                <ComboBox x:Name="HighlightBox" Width="104" ToolTip="Highlight colour" />
             </StackPanel>
             </WrapPanel>
+            </StackPanel>
         </Border>
 
         <Border DockPanel.Dock="Bottom" Background="{DynamicResource BarBrush}" BorderBrush="{DynamicResource LineBrush}" BorderThickness="0,1,0,0" Padding="10,4">
