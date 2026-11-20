@@ -20,13 +20,41 @@ public sealed unsafe partial class PdfDocument
     internal static int DirectEdits, RewrittenEdits;
 
     /// <summary>
-    /// Tries to make a change to items of a page in the page's instructions. Returns false,
+    /// Tries to move, turn or remove items of a page in the page's instructions. Returns false,
     /// leaving the document as it was, when it cannot be done that way.
     /// </summary>
     /// <param name="changeFor">For each item: a transform in the page's own coordinates, or null to remove it.</param>
     private bool TryEditInstructions(int pageIndex, IReadOnlyList<int> objectIndices, Func<int, Affine?> changeFor)
     {
-        if (!EditInstructionsDirectly || objectIndices.Count == 0) { RewrittenEdits++; return false; }
+        if (objectIndices.Count == 0) { RewrittenEdits++; return false; }
+        return TryRewriteInstructions(pageIndex, (read, facts) =>
+        {
+            var changes = new List<InstructionEdits.Change>();
+            foreach (int index in objectIndices.Distinct())
+            {
+                if (index < 0 || index >= read.Items.Count) throw new ArgumentOutOfRangeException(nameof(objectIndices));
+                var transform = changeFor(index);
+                if (transform is { } t)
+                {
+                    // Boxed in where it is drawn, the item moves but its clip does not: it must still fit inside.
+                    if (facts.Bounds(index) is not { } b) return null;
+                    var moved = t.MapBounds(b.Left, b.Bottom, b.Right, b.Top);
+                    if (!read.Items[index].Clip.LeavesWhole(moved.X, moved.Y, moved.Right, moved.Bottom)) return null;
+                }
+                changes.Add(new InstructionEdits.Change(index, transform));
+            }
+            return InstructionEdits.Apply(read, changes, facts);
+        });
+    }
+
+    /// <summary>
+    /// Reads the page's instructions, checks them against PDFium's objects, has
+    /// <paramref name="edit"/> produce new instructions, and puts those in the page's place.
+    /// Returns false, with the document as it was, when any step cannot be done.
+    /// </summary>
+    private bool TryRewriteInstructions(int pageIndex, Func<PageInstructions, InstructionEdits.Facts, byte[]?> edit)
+    {
+        if (!EditInstructionsDirectly) { RewrittenEdits++; return false; }
         try
         {
             CheckPage(pageIndex);
@@ -42,39 +70,26 @@ public sealed unsafe partial class PdfDocument
             var read = PageInstructions.Read(file, pageIndex, out _);
             if (read is null || read.ContentObjects.Count == 0 || read.PageObject < 0) { RewrittenEdits++; return false; }
 
-            // The items must be PDFium's objects, one for one; and an item that is clipped must stay inside its clip.
-            var changes = new List<InstructionEdits.Change>();
-            var placed = new Dictionary<int, Affine>(); // where PDFium has each piece of text concerned, and the piece after it
+            // The items must be PDFium's objects, one for one. What PDFium knows of each is noted:
+            // where it has every piece of text, and the room every item takes.
+            var placed = new Affine?[read.Items.Count];
+            var bounds = new (double, double, double, double)?[read.Items.Count];
             using (var page = OpenPage(pageIndex))
             {
                 int count = Native.FPDFPage_CountObjects(page.Handle);
                 if (count != read.Items.Count) { RewrittenEdits++; return false; }
                 for (int i = 0; i < count; i++)
-                    if (Native.FPDFPageObj_GetType(Native.FPDFPage_GetObject(page.Handle, i)) != (int)read.Items[i].Kind) { RewrittenEdits++; return false; }
-                foreach (int index in objectIndices.Distinct())
                 {
-                    if (index < 0 || index >= count) throw new ArgumentOutOfRangeException(nameof(objectIndices));
-                    var transform = changeFor(index);
-                    if (transform is { } t)
-                    {
-                        var obj = Native.FPDFPage_GetObject(page.Handle, index);
-                        float l = 0, b = 0, r = 0, top = 0;
-                        if (Native.FPDFPageObj_GetBounds(obj, &l, &b, &r, &top) == 0) { RewrittenEdits++; return false; }
-                        // Boxed in where it is drawn, the item moves but its clip does not: it must still fit inside.
-                        var moved = t.MapBounds(l, b, r, top);
-                        if (!read.Items[index].Clip.LeavesWhole(moved.X, moved.Y, moved.Right, moved.Bottom)) { RewrittenEdits++; return false; }
-                    }
-                    changes.Add(new InstructionEdits.Change(index, transform));
-                    if (read.Items[index].Kind != Content.ItemKind.Text) continue;
-                    foreach (int textIndex in new[] { index, index + 1 })
-                    {
-                        if (textIndex >= count || read.Items[textIndex].Kind != Content.ItemKind.Text) continue;
-                        Native.FS_MATRIX m;
-                        if (Native.FPDFPageObj_GetMatrix(Native.FPDFPage_GetObject(page.Handle, textIndex), &m) != 0) placed[textIndex] = new Affine(m.a, m.b, m.c, m.d, m.e, m.f);
-                    }
+                    var obj = Native.FPDFPage_GetObject(page.Handle, i);
+                    if (Native.FPDFPageObj_GetType(obj) != (int)read.Items[i].Kind) { RewrittenEdits++; return false; }
+                    float l = 0, b = 0, r = 0, top = 0;
+                    if (Native.FPDFPageObj_GetBounds(obj, &l, &b, &r, &top) != 0) bounds[i] = (l, b, r, top);
+                    Native.FS_MATRIX m;
+                    if (read.Items[i].Kind == Content.ItemKind.Text && Native.FPDFPageObj_GetMatrix(obj, &m) != 0) placed[i] = new Affine(m.a, m.b, m.c, m.d, m.e, m.f);
                 }
             }
-            byte[]? data = InstructionEdits.Apply(read, changes, i => placed.TryGetValue(i, out var where) ? where : null);
+            var facts = new InstructionEdits.Facts(i => i >= 0 && i < placed.Length ? placed[i] : null, i => i >= 0 && i < bounds.Length ? bounds[i] : null);
+            byte[]? data = edit(read, facts);
             if (data is null) { RewrittenEdits++; return false; }
 
             // The page's content becomes one stream, in place of its first; the page points at that alone.
@@ -98,9 +113,16 @@ public sealed unsafe partial class PdfDocument
 
             byte[]? packed = PackObjects.Apply(plain, replace, drop);
             if (packed is null) { RewrittenEdits++; return false; }
-            int pages = PageCount;
+            int pages = PageCount, items = read.Items.Count;
             Reload(packed);
-            if (PageCount != pages)
+            // The changed page must read back as the same number of items or fewer, never garbled into more.
+            bool sound = PageCount == pages;
+            if (sound)
+            {
+                using var check = OpenPage(pageIndex);
+                sound = Native.FPDFPage_CountObjects(check.Handle) <= items;
+            }
+            if (!sound)
             {
                 // Should never happen; go back to what PDFium wrote and let the older route do the edit.
                 Reload(plain);
@@ -116,7 +138,6 @@ public sealed unsafe partial class PdfDocument
             return false;
         }
     }
-
     /// <summary>Replaces what PDFium holds with a document read from the given bytes: this object stays the same document to its users.</summary>
     private void Reload(byte[] data)
     {

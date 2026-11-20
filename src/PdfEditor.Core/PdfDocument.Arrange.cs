@@ -1,3 +1,4 @@
+using PdfEditor.Core.Content;
 using PdfEditor.Core.Interop;
 
 namespace PdfEditor.Core;
@@ -27,41 +28,42 @@ public sealed unsafe partial class PdfDocument
     /// </summary>
     public bool MoveLayer(int pageIndex, IEnumerable<int> objectIndices, bool up)
     {
-        using var page = OpenPage(pageIndex);
         var indices = objectIndices.Distinct().OrderBy(i => i).ToList();
         if (indices.Count == 0) return false;
-        var moving = indices.Select(i => GetObject(page, i)).ToList();
         var chosen = new HashSet<int>(indices);
-
-        // The area the moving items cover together.
-        double left = double.MaxValue, top = double.MaxValue, right = double.MinValue, bottom = double.MinValue;
-        foreach (var obj in moving)
-        {
-            var b = ObjectBounds(page, obj);
-            (left, top, right, bottom) = (Math.Min(left, b.X), Math.Min(top, b.Y), Math.Max(right, b.Right), Math.Max(bottom, b.Bottom));
-        }
-        bool Overlaps(IntPtr other)
-        {
-            var b = ObjectBounds(page, other);
-            return b.X < right && b.Right > left && b.Y < bottom && b.Bottom > top;
-        }
 
         // The nearest overlapping item beyond the group, in the direction asked for. The drawing
         // order is the order of the objects: a later one is drawn over an earlier one.
-        int count = Native.FPDFPage_CountObjects(page.Handle);
-        IntPtr passed = IntPtr.Zero;
-        if (up)
+        int passedIndex = -1;
+        using (var look = OpenPage(pageIndex))
         {
-            for (int i = indices[^1] + 1; i < count && passed == IntPtr.Zero; i++)
-                if (!chosen.Contains(i) && Native.FPDFPage_GetObject(page.Handle, i) is var o && Overlaps(o)) passed = o;
+            // The area the moving items cover together.
+            double left = double.MaxValue, top = double.MaxValue, right = double.MinValue, bottom = double.MinValue;
+            foreach (int i in indices)
+            {
+                var b = ObjectBounds(look, GetObject(look, i));
+                (left, top, right, bottom) = (Math.Min(left, b.X), Math.Min(top, b.Y), Math.Max(right, b.Right), Math.Max(bottom, b.Bottom));
+            }
+            bool Overlaps(int i)
+            {
+                var b = ObjectBounds(look, Native.FPDFPage_GetObject(look.Handle, i));
+                return b.X < right && b.Right > left && b.Y < bottom && b.Bottom > top;
+            }
+            int total = Native.FPDFPage_CountObjects(look.Handle);
+            if (up) { for (int i = indices[^1] + 1; i < total && passedIndex < 0; i++) if (!chosen.Contains(i) && Overlaps(i)) passedIndex = i; }
+            else { for (int i = indices[0] - 1; i >= 0 && passedIndex < 0; i--) if (!chosen.Contains(i) && Overlaps(i)) passedIndex = i; }
         }
-        else
-        {
-            for (int i = indices[0] - 1; i >= 0 && passed == IntPtr.Zero; i--)
-                if (!chosen.Contains(i) && Native.FPDFPage_GetObject(page.Handle, i) is var o && Overlaps(o)) passed = o;
-        }
-        if (passed == IntPtr.Zero) return false;
+        if (passedIndex < 0) return false;
 
+        // First choice: in the page's own instructions, the items are taken out where they are and
+        // drawn again just past the item, with every setting they had. Nothing else is touched.
+        if (TryRewriteInstructions(pageIndex, (read, facts) => InstructionEdits.Relocate(read, indices, passedIndex, up, facts))) return true;
+
+        // Otherwise the older way, through PDFium (see the summary).
+        using var page = OpenPage(pageIndex);
+        var moving = indices.Select(i => GetObject(page, i)).ToList();
+        int count = Native.FPDFPage_CountObjects(page.Handle);
+        IntPtr passed = Native.FPDFPage_GetObject(page.Handle, passedIndex);
         // A fresh copy of each item.
         var (glyphs, pageFonts) = ReadPageText(page);
         var copies = new List<IntPtr>();

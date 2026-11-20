@@ -22,6 +22,43 @@ internal sealed record DrawnItem(ItemKind Kind, int Start, int End, string Opera
 {
     /// <summary>For a piece of text: the state of the text machinery where it is shown.</summary>
     public TextState? Text { get; init; }
+    /// <summary>Every setting in force where the item is drawn, as the instructions that made it so.</summary>
+    public DrawState State { get; init; } = DrawState.Initial;
+    /// <summary>Drawn between the instructions that open and close a block of text.</summary>
+    public bool InTextBlock { get; init; }
+    /// <summary>The saved-state sections ("q" to "Q") the item is drawn inside, outermost first.</summary>
+    public IReadOnlyList<Section> Sections { get; init; } = [];
+}
+
+/// <summary>
+/// A stretch of instructions between a "q" and its "Q": whatever is set inside it (space, clip,
+/// colours) is undone at the end, so the settings in force just before it and just after it are the same.
+/// </summary>
+internal sealed class Section(int start, DrawState state, Affine space, Clip clip, bool inTextBlock)
+{
+    public int Start { get; } = start;            // where its "q" is
+    public int End { get; set; } = -1;            // just past its "Q"
+    public DrawState State { get; } = state;      // what is in force outside it
+    public Affine Space { get; } = space;
+    public Clip Clip { get; } = clip;
+    public bool InTextBlock { get; } = inTextBlock;
+}
+
+/// <summary>One step of the clip in force: a path (with the instruction that makes it a clip), and the space it was given in.</summary>
+internal sealed record ClipStep(string Path, Affine Space);
+
+/// <summary>
+/// The drawing settings in force at some point of a page, each kept as the instruction that set
+/// it (null where nothing has, so the default holds). With these an item can be drawn again
+/// somewhere else on the page looking exactly as it did: the settings are simply given again.
+/// </summary>
+internal sealed record DrawState(
+    string? FillSpace, string? FillColour, string? StrokeSpace, string? StrokeColour,
+    string? LineWidth, string? Cap, string? Join, string? Mitre, string? Dash, string? Intent, string? Flatness,
+    string? Font, string? LetterSpace, string? WordSpace, string? Stretch, string? Leading, string? Mode, string? Rise,
+    IReadOnlyList<string> Settings, IReadOnlyList<ClipStep> Clips, bool CannotBeRepeated)
+{
+    public static readonly DrawState Initial = new(null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, [], [], false);
 }
 
 /// <summary>
@@ -181,7 +218,11 @@ internal sealed class PageInstructions
         // Numbers waiting for their operator, and the coordinate space (with those saved by "q").
         private readonly List<double> _numbers = [];
         private Affine _space = Affine.Identity;
-        private readonly Stack<(Affine Space, Clip Clip, double FontSize, double Stretch, double Rise, double Leading, int TextMode)> _saved = new();
+        private readonly Stack<(Affine Space, Clip Clip, double FontSize, double Stretch, double Rise, double Leading, int TextMode, DrawState State)> _saved = new();
+        private DrawState _state = DrawState.Initial;
+        private bool _inText;
+        private readonly List<Section> _open = [];
+        private Section[] _sections = [];
         // The clip in force; whether the path being built is one plain rectangle (and which); text that clips.
         private Clip _clip;
         private bool _onlyARectangle, _textClips;
@@ -231,6 +272,7 @@ internal sealed class PageInstructions
                     }
                 }
             }
+            foreach (var section in _open) section.End = d.Length; // never closed: it runs to the end
             return _items;
         }
 
@@ -331,7 +373,10 @@ internal sealed class PageInstructions
         }
 
         private void Add(ItemKind kind, int start, string op, int operatorAt, bool clipsToo = false) =>
-            _items.Add(new DrawnItem(kind, start, _p, op, operatorAt, _space, clipsToo, _clip));
+            _items.Add(new DrawnItem(kind, start, _p, op, operatorAt, _space, clipsToo, _clip) { State = _state, InTextBlock = _inText, Sections = _sections });
+
+        /// <summary>An instruction as it is written, operands and all.</summary>
+        private string Written(int start) => Encoding.Latin1.GetString(d, start, _p - start);
 
         /// <summary>A piece of text is shown. The one before it, if nothing set the position since, is noted as followed on.</summary>
         private void Show(int start, string op, int operatorAt)
@@ -343,6 +388,7 @@ internal sealed class PageInstructions
             }
             _items.Add(new DrawnItem(ItemKind.Text, start, _p, op, operatorAt, _space, false, _clip)
             {
+                State = _state, InTextBlock = _inText, Sections = _sections,
                 Text = new TextState(_lineStart, _fontSize, _stretch, _rise, _textMode, _stringAt >= start ? _stringAt : start),
             });
             _lastShown = _items.Count - 1;
@@ -377,8 +423,34 @@ internal sealed class PageInstructions
             {
                 // ---- the coordinate space
                 // "q" saves the whole drawing state, the text settings among it; "Q" brings it back.
-                case "q": _saved.Push((_space, _clip, _fontSize, _stretch, _rise, _leading, _textMode)); break;
-                case "Q": if (_saved.Count > 0) (_space, _clip, _fontSize, _stretch, _rise, _leading, _textMode) = _saved.Pop(); break;
+                case "q":
+                    _saved.Push((_space, _clip, _fontSize, _stretch, _rise, _leading, _textMode, _state));
+                    _open.Add(new Section(at, _state, _space, _clip, _inText));
+                    _sections = [.. _open];
+                    break;
+                case "Q":
+                    if (_saved.Count == 0) break;
+                    (_space, _clip, _fontSize, _stretch, _rise, _leading, _textMode, _state) = _saved.Pop();
+                    _open[^1].End = _p;
+                    _open.RemoveAt(_open.Count - 1);
+                    _sections = [.. _open];
+                    break;
+
+                // ---- settings, kept as written so they can be given again elsewhere
+                case "g" or "rg" or "k" or "cs": _state = _state with { FillSpace = Written(start), FillColour = null }; break;
+                case "G" or "RG" or "K" or "CS": _state = _state with { StrokeSpace = Written(start), StrokeColour = null }; break;
+                case "sc" or "scn": _state = _state with { FillColour = Written(start) }; break;
+                case "SC" or "SCN": _state = _state with { StrokeColour = Written(start) }; break;
+                case "w": _state = _state with { LineWidth = Written(start) }; break;
+                case "J": _state = _state with { Cap = Written(start) }; break;
+                case "j": _state = _state with { Join = Written(start) }; break;
+                case "M": _state = _state with { Mitre = Written(start) }; break;
+                case "d": _state = _state with { Dash = Written(start) }; break;
+                case "ri": _state = _state with { Intent = Written(start) }; break;
+                case "i": _state = _state with { Flatness = Written(start) }; break;
+                case "gs": _state = _state with { Settings = [.. _state.Settings, Written(start)] }; break;
+                case "Tc": _state = _state with { LetterSpace = Written(start) }; break;
+                case "Tw": _state = _state with { WordSpace = Written(start) }; break;
                 case "cm":
                     if (_numbers.Count >= 6)
                     {
@@ -420,7 +492,13 @@ internal sealed class PageInstructions
                 {
                     int points = _lastIsOpenMove ? _points - 1 : _points; // a move at the very end draws nothing
                     if (op != "n" && points >= 2) Add(ItemKind.Path, _pathStart >= 0 ? _pathStart : start, op, at, _clipPending);
-                    if (_clipPending && _pathSteps > 0) ClipToPath(); // the item itself is drawn under the clip as it was before
+                    if (_clipPending && _pathSteps > 0)
+                    {
+                        ClipToPath(); // the item itself is drawn under the clip as it was before
+                        // The path as written, ending in "n": clipping without painting.
+                        if (_pathStart >= 0) _state = _state with { Clips = [.. _state.Clips, new ClipStep(Encoding.Latin1.GetString(d, _pathStart, at - _pathStart) + " n", _space)] };
+                        else _state = _state with { CannotBeRepeated = true };
+                    }
                     (_pathStart, _points, _lastIsOpenMove, _clipPending, _pathSteps, _onlyARectangle) = (-1, 0, false, false, 0, false);
                     break;
                 }
@@ -431,6 +509,8 @@ internal sealed class PageInstructions
                     break;
                 case "'" or "\"":
                     NewLine(0, -_leading); // these move to the next line first, then show
+                    if (op == "\"" && _numbers.Count >= 2) // and the double quote sets the spacing of words and letters
+                        _state = _state with { WordSpace = $"{_numbers[^2].ToString("0.######", CultureInfo.InvariantCulture)} Tw", LetterSpace = $"{_numbers[^1].ToString("0.######", CultureInfo.InvariantCulture)} Tc" };
                     if (!_lastStringEmpty) Show(start, op, at);
                     break;
                 case "TJ":
@@ -440,11 +520,16 @@ internal sealed class PageInstructions
                 case "BT":
                     _lineStart = Affine.Identity;
                     (_lastShown, _shift) = (-1, 0);
+                    _inText = true;
                     break;
                 case "Td" or "TD":
                     if (_numbers.Count >= 2)
                     {
-                        if (op == "TD") _leading = -_numbers[^1];
+                        if (op == "TD")
+                        {
+                            _leading = -_numbers[^1];
+                            _state = _state with { Leading = $"{_leading.ToString("0.######", CultureInfo.InvariantCulture)} TL" };
+                        }
                         NewLine(_numbers[^2], _numbers[^1]);
                     }
                     break;
@@ -457,18 +542,24 @@ internal sealed class PageInstructions
                         _lastShown = -1;
                     }
                     break;
-                case "Tf": if (_numbers.Count >= 1) _fontSize = _numbers[^1]; break;
-                case "Tz": if (_numbers.Count >= 1) _stretch = _numbers[^1] / 100; break;
-                case "Ts": if (_numbers.Count >= 1) _rise = _numbers[^1]; break;
-                case "TL": if (_numbers.Count >= 1) _leading = _numbers[^1]; break;
+                case "Tf": if (_numbers.Count >= 1) _fontSize = _numbers[^1]; _state = _state with { Font = Written(start) }; break;
+                case "Tz": if (_numbers.Count >= 1) _stretch = _numbers[^1] / 100; _state = _state with { Stretch = Written(start) }; break;
+                case "Ts": if (_numbers.Count >= 1) _rise = _numbers[^1]; _state = _state with { Rise = Written(start) }; break;
+                case "TL": if (_numbers.Count >= 1) _leading = _numbers[^1]; _state = _state with { Leading = Written(start) }; break;
                 case "Tr":
                     if (_numbers.Count >= 1) _textMode = (int)_numbers[^1];
+                    _state = _state with { Mode = Written(start) };
                     break;
                 case "ET":
                     // Text drawn in a clipping mode becomes part of the clip when its block ends.
-                    if (_textClips) _clip = _clip with { Complex = true };
+                    if (_textClips)
+                    {
+                        _clip = _clip with { Complex = true };
+                        _state = _state with { CannotBeRepeated = true }; // a clip made of letters is not followed here
+                    }
                     _textClips = false;
                     _lastShown = -1;
+                    _inText = false;
                     break;
 
                 // ---- pictures, groups, gradients

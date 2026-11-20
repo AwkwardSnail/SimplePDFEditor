@@ -356,4 +356,156 @@ public unsafe class PageInstructionsTests
         using var saved = PdfDocument.Open(doc.ToBytes());
         Assert.Equal(["line two", "line three", "apart"], saved.GetTextRuns(0).Select(r => r.Text.Trim()).ToArray());
     }
+    // ------------------------------------------------------------------ layers: drawing an item earlier or later
+
+    private static (int R, int G, int B) Colour(RenderedPage page, double x, double yFromBottom, double scale = 1)
+    {
+        int i = (int)((300 - yFromBottom) * scale) * page.Stride + (int)(x * scale) * 4;
+        return (page.Pixels[i + 2], page.Pixels[i + 1], page.Pixels[i]);
+    }
+
+    /// <summary>How many pixels differ outside a box given in the page's own coordinates (y up), ignoring the handle's corner.</summary>
+    private static int DifferingOutside(RenderedPage a, RenderedPage b, double left, double bottom, double right, double top)
+    {
+        int n = 0;
+        for (int y = 0; y < a.Height; y++)
+            for (int x = 0; x < a.Width; x++)
+            {
+                if (x > a.Width * 0.88 && y < a.Height * 0.12) continue;
+                if (x >= left - 2 && x <= right + 2 && 300 - y >= bottom - 2 && 300 - y <= top + 2) continue;
+                int i = y * a.Stride + x * 4;
+                if (a.Pixels[i] != b.Pixels[i] || a.Pixels[i + 1] != b.Pixels[i + 1] || a.Pixels[i + 2] != b.Pixels[i + 2]) n++;
+            }
+        return n;
+    }
+
+    private const string RedPicture = "/Type/XObject/Subtype/Image/Width 1/Height 1/ColorSpace/DeviceRGB/BitsPerComponent 8/Filter/ASCIIHexDecode";
+
+    // Each: two items that overlap in the square from (100,100) to (140,140) or wider; the one to move (PDFium's
+    // index; the handle is 0), which way, and the colour the middle of the overlap must have afterwards.
+    public static IEnumerable<object[]> Overlaps() =>
+    [
+        ["plain boxes, the upper one down", Page("1 0 0 rg 50 50 100 100 re f 0 0 1 rg 100 100 100 100 re f"), 2, false, 255, 0, 0],
+        ["plain boxes, the lower one up", Page("1 0 0 rg 50 50 100 100 re f 0 0 1 rg 100 100 100 100 re f"), 1, true, 255, 0, 0],
+        ["in scaled spaces with line settings, down", Page("q 2 0 0 2 0 0 cm 1 0 0 rg 0 0 1 RG 3 w [4 2] 0 d 25 25 50 50 re B Q q 0.5 0 0 0.5 100 100 cm 0 1 0 rg 0 0 200 200 re f Q"), 2, false, 255, 0, 0],
+        ["in scaled spaces with line settings, up", Page("q 2 0 0 2 0 0 cm 1 0 0 rg 0 0 1 RG 3 w [4 2] 0 d 25 25 50 50 re B Q q 0.5 0 0 0.5 100 100 cm 0 1 0 rg 0 0 200 200 re f Q"), 1, true, 255, 0, 0],
+        ["a colour set outside the item's own box", Page("1 0 0 rg q 50 50 100 100 re f Q 0 0 1 rg q 100 100 100 100 re f Q"), 2, false, 255, 0, 0],
+        ["a clipped item moved up keeps its clip", Page("q 60 60 80 80 re W n 1 0 0 rg 50 50 100 100 re f Q 0 0 1 rg 100 100 100 100 re f"), 1, true, 255, 0, 0],
+        ["an item moved down past a clipped one", Page("q 60 60 80 80 re W n 1 0 0 rg 50 50 100 100 re f Q 0 0 1 rg 100 100 100 100 re f"), 2, false, 255, 0, 0],
+        ["a see-through item moved down", Page("1 0 0 rg 50 50 100 100 re f q /GS1 gs 0 0 1 rg 100 100 100 100 re f Q", "/ExtGState<</GS1<</ca 0.5>>>>"), 2, false, 255, 0, 0],
+        ["a tiled pattern moved down", Page("0 0 1 rg 100 100 100 100 re f /Pattern cs /P1 scn 50 50 100 100 re f", "/Pattern<</P1 5 0 R>>",
+            Stream("/Type/Pattern/PatternType 1/PaintType 1/TilingType 1/BBox[0 0 20 20]/XStep 20/YStep 20/Resources<<>>", "1 0 0 rg 0 0 20 20 re f")), 2, false, 0, 0, 255],
+        ["a picture moved down", Page("0 0 1 rg 100 100 100 100 re f q 100 0 0 100 50 50 cm /Im Do Q", "/XObject<</Im 5 0 R>>", Stream(RedPicture, "ff0000>")), 2, false, 0, 0, 255],
+        ["a picture moved up", Page("q 100 0 0 100 50 50 cm /Im Do Q 0 0 1 rg 100 100 100 100 re f", "/XObject<</Im 5 0 R>>", Stream(RedPicture, "ff0000>")), 1, true, 255, 0, 0],
+        ["an inline picture moved down", Page("0 0 1 rg 100 100 100 100 re f q 100 0 0 100 50 50 cm BI /W 1 /H 1 /CS /RGB /BPC 8 /F /AHx ID ff0000> EI Q"), 2, false, 0, 0, 255],
+        ["a group moved down", Page("0 0 1 rg 100 100 100 100 re f q 1 0 0 1 50 50 cm /Fm Do Q", "/XObject<</Fm 5 0 R>>", Stream("/Type/XObject/Subtype/Form/BBox[0 0 100 100]/Resources<<>>", "1 0 0 rg 0 0 100 100 re f")), 2, false, 0, 0, 255],
+        ["a gradient moved down", Page("0 0 1 rg 100 100 100 100 re f q 50 50 100 100 re W n /Sh sh Q",
+            "/Shading<</Sh<</ShadingType 2/ColorSpace/DeviceRGB/Coords[50 0 150 0]/Function<</FunctionType 2/Domain[0 1]/C0[1 0 0]/C1[1 0 0]/N 1>>>>>>"), 2, false, 0, 0, 255],
+    ];
+
+    [Theory]
+    [MemberData(nameof(Overlaps))]
+    public void An_item_moved_a_layer_changes_only_what_lies_over_what(string what, byte[] pdf, int item, bool up, int r, int g, int b)
+    {
+        using var doc = PdfDocument.Open(pdf);
+        var before = doc.Render(0, 1, false);
+        var kinds = AsPdfiumSeesIt(doc, 0);
+        int direct = PdfDocument.DirectEdits;
+        Assert.True(doc.MoveLayer(0, [item], up), what);
+        Assert.True(PdfDocument.DirectEdits == direct + 1, $"{what}: did not go the direct way");
+
+        using var saved = PdfDocument.Open(doc.ToBytes());
+        var after = saved.Render(0, 1, false);
+        Assert.Equal((r, g, b), Colour(after, 120, 120));                              // the other one is on top where they overlap
+        Assert.Equal(0, DifferingOutside(before, after, 94, 94, 156, 156));            // and nothing else on the page changed (a thick outline reaches a little past the square)
+        // The same items, in the new order: the moved one now next to the one it passed.
+        var expected = kinds.ToList();
+        int other = up ? item + 1 : item - 1;
+        (expected[item], expected[other]) = (expected[other], expected[item]);
+        Assert.Equal(expected, AsPdfiumSeesIt(saved, 0));
+
+        // Moved back, the page is as it was to begin with.
+        Assert.True(saved.MoveLayer(0, [other], !up), what);
+        using var back = PdfDocument.Open(saved.ToBytes());
+        Assert.Equal(0, Differing(before, back.Render(0, 1, false)));
+        Assert.Equal(kinds, AsPdfiumSeesIt(back, 0));
+    }
+
+    [Fact]
+    public void A_box_moved_down_through_a_block_of_text_leaves_every_piece_in_place()
+    {
+        // Three pieces of text sharing a writing position, and a green box drawn over all of them.
+        byte[] pdf = TextPage("BT /F1 20 Tf 22 TL 2 Tc 40 200 Td (first ) Tj (second) Tj T* (third) Tj ET 0 1 0 rg 30 170 240 55 re f");
+        using var doc = PdfDocument.Open(pdf);
+        var places = Pieces(doc);
+        int Ink(PdfDocument d, int piece)
+        {
+            var page = d.Render(0, 1, false);
+            var bounds = d.GetTextRuns(0)[piece].Bounds;
+            int n = 0;
+            for (int y = (int)bounds.Y; y < (int)bounds.Bottom; y++)
+                for (int x = (int)bounds.X; x < (int)bounds.Right; x++)
+                {
+                    int i = y * page.Stride + x * 4;
+                    if (page.Pixels[i] < 180 && page.Pixels[i + 1] < 180 && page.Pixels[i + 2] < 180) n++; // the text is mid grey (the colour in force), on green or white
+                }
+            return n;
+        }
+        Assert.Equal((0, 0, 0), (Ink(doc, 0), Ink(doc, 1), Ink(doc, 2))); // all hidden under the box
+        int direct = PdfDocument.DirectEdits;
+
+        // One layer down: under the last piece only.
+        Assert.True(doc.MoveLayer(0, [4], up: false));
+        Assert.Equal([1, 1, 2, 1], AsPdfiumSeesIt(doc, 0).Skip(1).ToList());
+        Assert.True(Ink(doc, 2) > 50 && Ink(doc, 0) == 0 && Ink(doc, 1) == 0, $"only the third piece should show: ink {Ink(doc, 0)}, {Ink(doc, 1)}, {Ink(doc, 2)}");
+        // Again: under the second too. And again: under all three.
+        Assert.True(doc.MoveLayer(0, [3], up: false));
+        Assert.True(Ink(doc, 2) > 50 && Ink(doc, 1) > 50 && Ink(doc, 0) == 0, "the second and third show");
+        Assert.True(doc.MoveLayer(0, [2], up: false));
+        Assert.True(Ink(doc, 0) > 50 && Ink(doc, 1) > 50 && Ink(doc, 2) > 50, "all three show");
+        Assert.False(doc.MoveLayer(0, [1], up: false)); // nothing under it now but the handle, which it does not touch
+        Assert.Equal(direct + 3, PdfDocument.DirectEdits);
+
+        using var saved = PdfDocument.Open(doc.ToBytes());
+        var now = Pieces(saved);
+        Assert.Equal(3, now.Count);
+        for (int i = 0; i < 3; i++) AssertSamePlace(places[i], now[i], "after the box went under the text");
+    }
+
+    [Fact]
+    public void Text_is_moved_a_layer_too_with_its_look_and_place_kept()
+    {
+        // Red, spaced, stretched text over a blue box; the first piece is moved under the box.
+        byte[] pdf = TextPage("0 0 1 rg 40 140 220 40 re f BT /F1 24 Tf 2 Tc 120 Tz 1 0 0 rg 50 150 Td (Over) Tj ( it) Tj ET");
+        using var doc = PdfDocument.Open(pdf);
+        var places = Pieces(doc);
+        var before = doc.Render(0, 1, false);
+        int Red(RenderedPage page, PdfRect area)
+        {
+            int n = 0;
+            for (int y = (int)area.Y; y < (int)area.Bottom; y++)
+                for (int x = (int)area.X; x < (int)area.Right; x++)
+                {
+                    int i = y * page.Stride + x * 4;
+                    if (page.Pixels[i + 2] > 130 && page.Pixels[i + 1] < 100 && page.Pixels[i] < 140) n++; // thin red strokes, blended a little with the blue beneath
+                }
+            return n;
+        }
+        Assert.True(Red(before, places[0].Bounds) > 20, $"red pixels to begin with: {Red(before, places[0].Bounds)}");
+        int direct = PdfDocument.DirectEdits;
+        Assert.True(doc.MoveLayer(0, [2], up: false));
+        Assert.Equal(direct + 1, PdfDocument.DirectEdits);
+        using var saved = PdfDocument.Open(doc.ToBytes());
+        var under = saved.Render(0, 1, false);
+        Assert.Equal(0, Red(under, places[0].Bounds));                 // hidden by the box now
+        Assert.True(Red(under, places[1].Bounds) > 10);               // the piece after it still shows, where it was
+        var now = Pieces(saved);
+        AssertSamePlace(places[0], now.Single(p => p.Text.Trim() == "Over"), "the moved piece");
+        AssertSamePlace(places[1], now.Single(p => p.Text.Trim() == "it"), "the piece after it");
+
+        // And up again: the page is as it was.
+        Assert.True(saved.MoveLayer(0, [1], up: true));
+        using var back = PdfDocument.Open(saved.ToBytes());
+        Assert.Equal(0, Differing(before, back.Render(0, 1, false)));
+    }
 }
