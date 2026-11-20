@@ -571,23 +571,17 @@ public sealed unsafe partial class PdfDocument
     /// shapes that touch or sit close together are grouped into one drawing. Shapes covering
     /// most of the page (backgrounds, page frames) are left out.
     /// </summary>
-    public IReadOnlyList<DrawingInfo> GetDrawings(int pageIndex)
+    /// <param name="separate">Shapes (by their place in the page's order) to keep on their own, whatever they touch.</param>
+    /// <param name="together">Sets of shapes to treat as one drawing each, however far apart they are.</param>
+    public IReadOnlyList<DrawingInfo> GetDrawings(int pageIndex, IReadOnlyCollection<int>? separate = null, IReadOnlyList<IReadOnlyCollection<int>>? together = null)
     {
         using var page = OpenPage(pageIndex);
         const double reach = 3; // shapes within this many points of each other belong together
-        double pageArea = page.Width * page.Height;
         var shapes = new List<(int Index, PdfRect Bounds)>();
         int count = Native.FPDFPage_CountObjects(page.Handle);
         for (int i = 0; i < count; i++)
-        {
-            var obj = Native.FPDFPage_GetObject(page.Handle, i);
-            int type = Native.FPDFPageObj_GetType(obj);
-            if (type is Native.PAGEOBJ_TEXT or Native.PAGEOBJ_IMAGE) continue;
-            var bounds = ObjectBounds(page, obj);
-            if (bounds.Width <= 0 && bounds.Height <= 0) continue;
-            if (bounds.Width * bounds.Height > 0.5 * pageArea) continue;
-            shapes.Add((i, bounds));
-        }
+            if (IsShape(page, Native.FPDFPage_GetObject(page.Handle, i), out var bounds)) shapes.Add((i, bounds));
+        var alone = separate is null ? [] : separate.ToHashSet();
 
         // Union-find over shapes whose (slightly grown) boxes overlap.
         var parent = Enumerable.Range(0, shapes.Count).ToArray();
@@ -595,10 +589,17 @@ public sealed unsafe partial class PdfDocument
         for (int a = 0; a < shapes.Count; a++)
             for (int b = a + 1; b < shapes.Count; b++)
             {
+                if (alone.Contains(shapes[a].Index) || alone.Contains(shapes[b].Index)) continue;
                 var (p, q) = (shapes[a].Bounds, shapes[b].Bounds);
                 if (p.X - reach <= q.Right && q.X - reach <= p.Right && p.Y - reach <= q.Bottom && q.Y - reach <= p.Bottom)
                     parent[Find(a)] = Find(b);
             }
+
+        foreach (var set in together ?? [])
+        {
+            var members = Enumerable.Range(0, shapes.Count).Where(i => set.Contains(shapes[i].Index)).ToList();
+            for (int k = 1; k < members.Count; k++) parent[Find(members[k])] = Find(members[0]);
+        }
 
         return shapes.Select((s, i) => (Shape: s, Root: Find(i)))
             .GroupBy(x => x.Root)

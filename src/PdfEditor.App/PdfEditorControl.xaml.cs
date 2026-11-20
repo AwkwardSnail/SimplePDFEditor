@@ -40,6 +40,10 @@ public partial class PdfEditorControl : UserControl
     private IReadOnlyList<TextRun> _runs = [];
     private IReadOnlyList<ImageInfo> _images = [];
     private IReadOnlyList<DrawingInfo> _drawings = [];
+    private IReadOnlyList<ShapeInfo> _shapes = [];
+    // Which shapes the user has taken out of their figure, or joined into one, while this document is open.
+    private readonly ShapeGroups _shapeGroups = new();
+    private int _groupsPageCount = -1;
     private IReadOnlyList<AnnotationInfo> _annotations = [];
 
     private Selection? _selection;
@@ -181,6 +185,7 @@ public partial class PdfEditorControl : UserControl
         _session.Changed += OnSessionChanged;
         _page = 0;
         _selection = null;
+        _shapeGroups.Clear();
         RefreshAll();
     }
 
@@ -239,6 +244,9 @@ public partial class PdfEditorControl : UserControl
         DiscardEditor();
         int count = Doc.PageCount;
         _page = Math.Clamp(_page, 0, Math.Max(0, count - 1));
+        // Pages added or removed: what was noted about shapes was noted by page number, and no longer fits.
+        if (count != _groupsPageCount) _shapeGroups.Clear();
+        _groupsPageCount = count;
 
         _updating = true;
         try
@@ -275,7 +283,9 @@ public partial class PdfEditorControl : UserControl
 
         _runs = Doc.GetTextRuns(_page);
         _images = Doc.GetImages(_page);
-        _drawings = Doc.GetDrawings(_page);
+        _shapes = Doc.GetShapes(_page);
+        var (apart, together) = _shapeGroups.Update(_page, _shapes);
+        _drawings = Doc.GetDrawings(_page, apart, together);
         _annotations = Doc.GetAnnotations(_page);
         if (_breakPositions is not null)
         {
@@ -290,7 +300,7 @@ public partial class PdfEditorControl : UserControl
             {
                 ItemKind.Text => _runs.Where(r => r.ObjectIndex == s.Index).Select(r => s with { Bounds = r.Bounds }).FirstOrDefault(),
                 ItemKind.Image => _images.Where(i => i.ObjectIndex == s.Index).Select(i => s with { Bounds = i.Bounds }).FirstOrDefault(),
-                ItemKind.Drawing => _drawings.Where(d => d.ObjectIndices[0] == s.Index).Select(d => s with { Bounds = d.Bounds, Group = d.ObjectIndices }).FirstOrDefault(),
+                ItemKind.Drawing => DrawingSelection(_drawings.Where(d => d.ObjectIndices.Any((s.Group ?? [s.Index]).Contains)).ToList()),
                 _ => _annotations.Where(a => a.Index == s.Index).Select(a => s with { Bounds = a.Bounds }).FirstOrDefault(),
             };
         }
@@ -789,6 +799,12 @@ public partial class PdfEditorControl : UserControl
             StartDrag(Drag.Move, p, block.Bounds);
             return;
         }
+        // The same for several drawings picked together.
+        if (clickCount < 2 && _selection is { Kind: ItemKind.Drawing } figures && IsSeveralDrawings(figures) && figures.Bounds.Contains(p.X, p.Y))
+        {
+            StartDrag(Drag.Move, p, figures.Bounds);
+            return;
+        }
 
         var hit = HitTest(p) ?? UngroupAt(p);
         Select(hit);
@@ -832,11 +848,41 @@ public partial class PdfEditorControl : UserControl
         var image = _images.LastOrDefault(i => i.Bounds.Contains(p.X, p.Y));
         if (image is not null) return new Selection(ItemKind.Image, image.ObjectIndex, image.Bounds);
         // Vector drawings last, smallest first, so a figure inside a frame is picked before the frame.
-        var drawing = _drawings.Where(d => d.Bounds.Contains(p.X, p.Y)).OrderBy(d => d.Bounds.Width * d.Bounds.Height).FirstOrDefault();
-        if (drawing is not null) return new Selection(ItemKind.Drawing, drawing.ObjectIndices[0], drawing.Bounds, drawing.ObjectIndices);
+        if (DrawingAt(p) is { } drawing) return new Selection(ItemKind.Drawing, drawing.ObjectIndices[0], drawing.Bounds, drawing.ObjectIndices);
         var wide = _runs.LastOrDefault(r => r.Bounds.Contains(p.X, p.Y));
         return wide is null ? null : new Selection(ItemKind.Text, wide.ObjectIndex, wide.Bounds);
     }
+
+    /// <summary>
+    /// The drawing at a point. What is actually drawn there comes first, and of that whatever lies
+    /// on top: a shape's filling, or its line. Failing that (empty space inside a figure, or inside
+    /// a box with no filling), the smallest drawing the point is within, so that a figure inside a
+    /// frame is picked before the frame; a shape on its own counts only within its own outline.
+    /// </summary>
+    private DrawingInfo? DrawingAt(Point p)
+    {
+        IReadOnlyList<ShapeHit> hits;
+        try { hits = Doc.HitShapes(_page, p.X, p.Y, 4 / ViewScale); }
+        catch (PdfException) { hits = []; }
+        if (hits.LastOrDefault(h => h.OnInk) is { } top && _drawings.FirstOrDefault(d => d.ObjectIndices.Contains(top.ObjectIndex)) is { } shown) return shown;
+        var within = hits.Where(h => h.Inside).Select(h => h.ObjectIndex).ToHashSet();
+        return _drawings.Where(d => d.Bounds.Contains(p.X, p.Y) && (d.ObjectIndices.Count > 1 || within.Contains(d.ObjectIndices[0])))
+                        .OrderBy(d => d.Bounds.Width * d.Bounds.Height).FirstOrDefault();
+    }
+
+    /// <summary>One selection that holds all the given drawings, to be moved, changed or deleted together.</summary>
+    private static Selection? DrawingSelection(IReadOnlyList<DrawingInfo> drawings)
+    {
+        if (drawings.Count == 0) return null;
+        double left = drawings.Min(d => d.Bounds.X), top = drawings.Min(d => d.Bounds.Y);
+        var bounds = new PdfRect(left, top, drawings.Max(d => d.Bounds.Right) - left, drawings.Max(d => d.Bounds.Bottom) - top);
+        var shapes = drawings.SelectMany(d => d.ObjectIndices).Distinct().OrderBy(i => i).ToList();
+        return new Selection(ItemKind.Drawing, shapes[0], bounds, shapes);
+    }
+
+    /// <summary>Whether the selection is several drawings picked together (with a dragged-out box).</summary>
+    private bool IsSeveralDrawings(Selection s) =>
+        s is { Kind: ItemKind.Drawing, Group: { } shapes } && _drawings.Count(d => d.ObjectIndices.Any(shapes.Contains)) > 1;
 
     private void Select(Selection? selection)
     {
@@ -965,7 +1011,15 @@ public partial class PdfEditorControl : UserControl
         var touched = _runs.Where(r => r.Text.Trim().Length > 0
             && r.Bounds.X < area.Right && r.Bounds.Right > area.X && r.Bounds.Y < area.Bottom && r.Bounds.Bottom > area.Y
             && (r.Bounds.Width * r.Bounds.Height < large || r.Bounds.X >= area.X && r.Bounds.Right <= area.Right && r.Bounds.Y >= area.Y && r.Bounds.Bottom <= area.Bottom)).ToList();
-        if (touched.Count == 0) { Select(null); return; }
+        if (touched.Count == 0)
+        {
+            // No text there: the drawings the box touches instead (but not a frame the box was drawn inside of).
+            var drawings = _drawings.Where(d => d.Bounds.X < area.Right && d.Bounds.Right > area.X && d.Bounds.Y < area.Bottom && d.Bounds.Bottom > area.Y
+                && !(d.Bounds.X < area.X && d.Bounds.Right > area.Right && d.Bounds.Y < area.Y && d.Bounds.Bottom > area.Bottom)).ToList();
+            Select(DrawingSelection(drawings));
+            if (drawings.Count > 1) ShowStatus($"{drawings.Count} drawings selected. Drag to move them together, Delete to remove them, right-click to change or group them.");
+            return;
+        }
         if (touched.Count == 1)
         {
             Select(new Selection(ItemKind.Text, touched[0].ObjectIndex, touched[0].Bounds));
@@ -1048,13 +1102,14 @@ public partial class PdfEditorControl : UserControl
     /// </summary>
     private bool ShowDrawingMenu(Point p)
     {
-        var drawing = _drawings.Where(d => d.Bounds.Contains(p.X, p.Y)).OrderBy(d => d.Bounds.Width * d.Bounds.Height).FirstOrDefault();
-        if (drawing is null) return false;
+        // Anywhere inside several drawings picked together is a right-click on all of them.
+        var drawing = _selection is { Kind: ItemKind.Drawing } several && IsSeveralDrawings(several) && several.Bounds.Contains(p.X, p.Y) ? null : DrawingAt(p);
+        if (drawing is null && !(_selection is { Kind: ItemKind.Drawing } kept && IsSeveralDrawings(kept) && kept.Bounds.Contains(p.X, p.Y))) return false;
         Focus();
-        Select(new Selection(ItemKind.Drawing, drawing.ObjectIndices[0], drawing.Bounds, drawing.ObjectIndices));
+        if (drawing is not null) Select(new Selection(ItemKind.Drawing, drawing.ObjectIndices[0], drawing.Bounds, drawing.ObjectIndices));
 
         int page = _page;
-        var shapes = drawing.ObjectIndices;
+        var shapes = _selection!.Group!;
         var menu = new ContextMenu { PlacementTarget = Overlay };
         void Add(string header, Action action)
         {
@@ -1084,6 +1139,27 @@ public partial class PdfEditorControl : UserControl
         });
         menu.Items.Add(new Separator());
         AddLayerItems(menu, shapes);
+
+        // Shapes that touch are taken as one figure. Ungroup lets each be picked on its own; Group joins
+        // shapes picked together. Either holds while the document is open (a PDF keeps no groups).
+        var places = _shapes.Where(s => shapes.Contains(s.ObjectIndex)).Select(s => s.Bounds).ToList();
+        int figures = _drawings.Count(d => d.ObjectIndices.Any(shapes.Contains));
+        bool canUngroup = shapes.Count > 1 && _drawings.Any(d => d.ObjectIndices.Count > 1 && d.ObjectIndices.Any(shapes.Contains));
+        bool canGroup = figures > 1;
+        if (canUngroup || canGroup) menu.Items.Add(new Separator());
+        if (canUngroup) Add("Ungroup", () =>
+        {
+            _shapeGroups.Ungroup(page, places);
+            _selection = null;
+            RefreshAll();
+            ShowStatus($"Ungrouped: each of the {places.Count} shapes can now be picked on its own. Shapes that touch are one figure again when the file is next opened.");
+        });
+        if (canGroup) Add("Group", () =>
+        {
+            _shapeGroups.Group(page, places);
+            RefreshAll();
+            ShowStatus($"Grouped: the {places.Count} shapes are picked and moved as one figure while this file is open.");
+        });
         menu.Items.Add(new Separator());
         Add("Delete", DeleteSelection);
         menu.IsOpen = true;
@@ -1603,6 +1679,7 @@ public partial class PdfEditorControl : UserControl
         _selection = null;
         int previous = _page;
         _page = to;
+        _shapeGroups.Clear(); // noted by page number, which no longer fits
         if (!Edit(d => d.MovePage(from, to))) { _page = previous; RefreshAll(); }
         else ShowStatus($"Page {from + 1} moved to position {to + 1}.");
     }

@@ -1597,4 +1597,44 @@ public class PdfDocumentTests
         Assert.Equal(TextEditResult.Removed, saved.EditText(0, now.ObjectIndex, ""));
         Assert.Equal(["Stays as it is", "Also stays"], saved.GetTextRuns(0).Select(r => r.Text.Trim()).ToArray());
     }
+
+    [Fact]
+    public void A_point_picks_the_shape_that_is_really_there_and_the_one_on_top()
+    {
+        using var doc = PdfDocument.Create();
+        doc.AddPage(595, 842);
+        var line = new ShapeStyle { Stroke = new PdfColor(200, 30, 30), Width = 2 };
+        int box = doc.AddShape(0, ShapeKind.Box, [new PdfPoint(100, 100), new PdfPoint(220, 180)], line);                                                   // no filling, underneath
+        int circle = doc.AddShape(0, ShapeKind.Ellipse, [new PdfPoint(180, 140), new PdfPoint(320, 240)], line with { Fill = new PdfColor(255, 235, 60) }); // filled, on top
+        int arrow = doc.AddShape(0, ShapeKind.Line, [new PdfPoint(400, 100), new PdfPoint(500, 200)], line);
+
+        int[] OnInk(double x, double y) => doc.HitShapes(0, x, y, 3).Where(h => h.OnInk).Select(h => h.ObjectIndex).ToArray();
+        int[] Inside(double x, double y) => doc.HitShapes(0, x, y, 3).Where(h => h.Inside).Select(h => h.ObjectIndex).ToArray();
+
+        Assert.Equal([box, circle], OnInk(220, 160));   // where the circle covers the box's line: both, the circle last (on top)
+        Assert.Equal([circle], OnInk(250, 190));        // the circle's filling
+        Assert.Equal([box], OnInk(100, 130));           // the box's line, away from the circle
+        Assert.Empty(OnInk(140, 130));                  // inside the box, where nothing is drawn...
+        Assert.Equal([box], Inside(140, 130));          // ...but within its outline
+        Assert.Empty(Inside(310, 150));                 // a corner of the room the circle takes, outside the circle itself
+        Assert.Equal([arrow], OnInk(450, 151));         // on the line
+        Assert.Empty(Inside(480, 120));                 // beside the line, though within the room it takes
+    }
+
+    [Fact]
+    public void Shapes_that_touch_are_one_drawing_unless_kept_apart_and_far_ones_can_be_joined()
+    {
+        using var doc = PdfDocument.Create();
+        doc.AddPage(595, 842);
+        var line = new ShapeStyle { Stroke = new PdfColor(0, 0, 0), Width = 1 };
+        int a = doc.AddShape(0, ShapeKind.Box, [new PdfPoint(100, 100), new PdfPoint(200, 180)], line);
+        int b = doc.AddShape(0, ShapeKind.Ellipse, [new PdfPoint(180, 140), new PdfPoint(300, 240)], line);
+        int far = doc.AddShape(0, ShapeKind.Box, [new PdfPoint(400, 600), new PdfPoint(450, 650)], line);
+
+        Assert.Equal([[a, b], [far]], doc.GetDrawings(0).Select(d => d.ObjectIndices.ToArray()).ToArray());
+        Assert.Equal([[a], [b], [far]], doc.GetDrawings(0, separate: [a]).Select(d => d.ObjectIndices.ToArray()).ToArray());
+        var joined = doc.GetDrawings(0, separate: [a], together: [new[] { b, far }]);
+        Assert.Equal([[a], [b, far]], joined.Select(d => d.ObjectIndices.ToArray()).ToArray());
+        Assert.Equal(3, doc.GetShapes(0).Count);
+    }
 }
