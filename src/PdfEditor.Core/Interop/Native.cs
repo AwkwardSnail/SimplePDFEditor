@@ -101,6 +101,9 @@ internal static unsafe class Native
     [DllImport(Lib)] public static extern void FPDFPageObj_TransformClipPath(IntPtr obj, double a, double b, double c, double d, double e, double f);
     [DllImport(Lib)] public static extern IntPtr FPDFAnnot_GetLink(IntPtr annot);
     [DllImport(Lib)] public static extern IntPtr FPDFLink_GetAction(IntPtr link);
+    [DllImport(Lib)] public static extern IntPtr FPDFLink_GetDest(IntPtr doc, IntPtr link);
+    [DllImport(Lib)] public static extern IntPtr FPDFAction_GetDest(IntPtr doc, IntPtr action);
+    [DllImport(Lib)] public static extern int FPDFDest_GetDestPageIndex(IntPtr doc, IntPtr dest);
     [DllImport(Lib)] public static extern CULong FPDFAction_GetType(IntPtr action);
     [DllImport(Lib)] public static extern CULong FPDFAction_GetURIPath(IntPtr doc, IntPtr action, byte* buffer, CULong length);
     [DllImport(Lib)] public static extern int FPDFAnnot_SetURI(IntPtr annot, [MarshalAs(UnmanagedType.LPStr)] string uri);

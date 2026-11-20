@@ -1170,6 +1170,100 @@ public class PdfDocumentTests
         Assert.Contains("Added later", third.GetPageText(0));
     }
 
+    /// <summary>Everything a saved file says, with its compressed parts unpacked, as text to search in.</summary>
+    private static string Unpacked(byte[] pdf)
+    {
+        string raw = System.Text.Encoding.Latin1.GetString(pdf);
+        var all = new System.Text.StringBuilder(raw);
+        foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(raw, @"stream\r?\n"))
+        {
+            int start = m.Index + m.Length, end = raw.IndexOf("endstream", start, StringComparison.Ordinal);
+            if (end < 0) continue;
+            try
+            {
+                using var z = new System.IO.Compression.ZLibStream(new MemoryStream(pdf, start, end - start), System.IO.Compression.CompressionMode.Decompress);
+                using var plain = new MemoryStream();
+                z.CopyTo(plain);
+                all.Append('\n').Append(System.Text.Encoding.Latin1.GetString(plain.ToArray()));
+            }
+            catch (InvalidDataException) { } // not compressed
+        }
+        return all.ToString();
+    }
+
+    /// <summary>Three pages. A heading that leads to page two has bookmarks to pages two and three beneath it; another bookmark leads to page three; page one links to page two.</summary>
+    private static byte[] PdfWithBookmarksAndALink()
+    {
+        const string one = "0 0 1 rg 50 50 100 30 re f", two = "BT /F1 20 Tf 40 150 Td (PRIVATE-PAGE-TWO) Tj ET", three = "BT /F1 20 Tf 40 150 Td (Page three) Tj ET";
+        const string font = "/Resources<</Font<</F1<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>>>>>";
+        return System.Text.Encoding.ASCII.GetBytes(
+            "%PDF-1.7\n1 0 obj<</Type/Catalog/Pages 2 0 R/Outlines 5 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R 7 0 R 10 0 R]/Count 3>>endobj\n" +
+            $"3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 300]/Contents 4 0 R/Annots[8 0 R]{font}>>endobj\n" +
+            $"4 0 obj<</Length {one.Length}>>stream\n{one}\nendstream endobj\n" +
+            "5 0 obj<</Type/Outlines/First 13 0 R/Last 11 0 R/Count 4>>endobj\n" +
+            "13 0 obj<</Title(Heading)/Parent 5 0 R/Next 11 0 R/First 6 0 R/Last 14 0 R/Count 2/Dest[7 0 R/Fit]>>endobj\n" +
+            "6 0 obj<</Title(Bookmark to page two)/Parent 13 0 R/Next 14 0 R/Dest[7 0 R/Fit]>>endobj\n" +
+            "14 0 obj<</Title(Under the heading)/Parent 13 0 R/Prev 6 0 R/Dest[10 0 R/Fit]>>endobj\n" +
+            $"7 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 300]/Contents 9 0 R{font}>>endobj\n" +
+            "8 0 obj<</Type/Annot/Subtype/Link/Rect[50 50 150 80]/Dest[7 0 R/Fit]/Border[0 0 0]>>endobj\n" +
+            $"9 0 obj<</Length {two.Length}>>stream\n{two}\nendstream endobj\n" +
+            $"10 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 300]/Contents 12 0 R{font}>>endobj\n" +
+            "11 0 obj<</Title(Bookmark to page three)/Parent 5 0 R/Prev 13 0 R/Dest[10 0 R/Fit]>>endobj\n" +
+            $"12 0 obj<</Length {three.Length}>>stream\n{three}\nendstream endobj\n" +
+            "trailer<</Root 1 0 R>>\n%%EOF");
+    }
+
+    [Fact]
+    public void A_deleted_page_leaves_nothing_behind_in_the_saved_file()
+    {
+        byte[] original = PdfWithBookmarksAndALink();
+        using var doc = PdfDocument.Open(original);
+        Assert.Contains("PRIVATE-PAGE-TWO", doc.GetPageText(1));
+        // Saved untouched, everything is there.
+        string whole = Unpacked(doc.ToBytes());
+        Assert.Contains("PRIVATE-PAGE-TWO", whole);
+        Assert.Contains("Bookmark to page two", whole);
+
+        doc.DeletePage(1);
+        byte[] saved = doc.ToBytes();
+        string text = Unpacked(saved);
+        Assert.DoesNotContain("PRIVATE-PAGE-TWO", text);          // the page's content is gone, not just hidden
+        Assert.DoesNotContain("Bookmark to page two", text);      // so is the bookmark that led to it
+        Assert.DoesNotContain("/Subtype/Link", text.Replace(" ", "")); // and the link on page one
+        Assert.Contains("Bookmark to page three", text);          // the other bookmark stays
+        Assert.Contains("Under the heading", text);
+        Assert.Contains("(Heading)", text);                       // it led to the deleted page too, but still has a bookmark beneath it
+        Assert.DoesNotContain("7 0 R", text);                     // nothing points at the deleted page any more
+
+        // With that last bookmark's page gone as well, the heading has nothing left and goes too.
+        using (var both = PdfDocument.Open(original))
+        {
+            both.DeletePage(2);
+            both.DeletePage(1);
+            string left = Unpacked(both.ToBytes());
+            Assert.DoesNotContain("(Heading)", left);
+            Assert.DoesNotContain("Bookmark to", left);
+            Assert.DoesNotContain("Page three", left);
+        }
+
+        using var again = PdfDocument.Open(saved);
+        Assert.Equal(2, again.PageCount);
+        Assert.Contains("Page three", again.GetPageText(1));
+        Assert.DoesNotContain(again.GetAnnotations(0), a => a.Bounds.Width > 90);
+    }
+
+    [Fact]
+    public void Moving_a_page_keeps_its_bookmarks_and_links()
+    {
+        using var doc = PdfDocument.Open(PdfWithBookmarksAndALink());
+        doc.MovePage(2, 0);
+        string text = Unpacked(doc.ToBytes());
+        Assert.Contains("PRIVATE-PAGE-TWO", text);
+        Assert.Contains("Bookmark to page two", text);
+        Assert.Contains("Bookmark to page three", text);
+        Assert.Contains("/Link", text);
+    }
+
     private static int PixelsThatDiffer(RenderedPage a, RenderedPage b, PdfRect area)
     {
         int changed = 0;

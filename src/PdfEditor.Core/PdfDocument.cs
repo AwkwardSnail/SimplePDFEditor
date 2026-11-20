@@ -138,10 +138,49 @@ public sealed unsafe partial class PdfDocument : IDisposable
         return at;
     }
 
+    /// <summary>
+    /// Deletes a page. Links on other pages that led to it are removed with it; bookmarks that led
+    /// to it are taken out when the document is saved, and the page's content is not written to
+    /// the saved file (see PackObjects).
+    /// </summary>
     public void DeletePage(int pageIndex)
     {
         CheckPage(pageIndex);
+        RemoveLinksTo(pageIndex);
         Native.FPDFPage_Delete(Doc, pageIndex);
+    }
+
+    /// <summary>Removes, from every other page, the links that jump to the given page.</summary>
+    private void RemoveLinksTo(int target)
+    {
+        const int LinkAnnotation = 2;
+        for (int p = 0; p < PageCount; p++)
+        {
+            if (p == target) continue;
+            var page = Native.FPDF_LoadPage(Doc, p);
+            if (page == IntPtr.Zero) continue;
+            try
+            {
+                for (int i = Native.FPDFPage_GetAnnotCount(page) - 1; i >= 0; i--)
+                {
+                    var annot = Native.FPDFPage_GetAnnot(page, i);
+                    if (annot == IntPtr.Zero) continue;
+                    int leadsTo = -1;
+                    try
+                    {
+                        if (Native.FPDFAnnot_GetSubtype(annot) != LinkAnnotation) continue;
+                        var link = Native.FPDFAnnot_GetLink(annot);
+                        if (link == IntPtr.Zero) continue;
+                        var dest = Native.FPDFLink_GetDest(Doc, link);
+                        if (dest == IntPtr.Zero && Native.FPDFLink_GetAction(link) is var action && action != IntPtr.Zero) dest = Native.FPDFAction_GetDest(Doc, action);
+                        if (dest != IntPtr.Zero) leadsTo = Native.FPDFDest_GetDestPageIndex(Doc, dest);
+                    }
+                    finally { Native.FPDFPage_CloseAnnot(annot); }
+                    if (leadsTo == target) Native.FPDFPage_RemoveAnnot(page, i);
+                }
+            }
+            finally { Native.FPDF_ClosePage(page); }
+        }
     }
 
     /// <summary>Moves a page so that it ends up at <paramref name="toIndex"/>.</summary>

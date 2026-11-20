@@ -20,8 +20,11 @@ internal static class PackObjects
     {
         try
         {
-            var packed = new Pass(pdf).Run();
-            return packed is not null && packed.Length < pdf.Length ? packed : pdf;
+            var pass = new Pass(pdf);
+            var packed = pass.Run();
+            // Smaller is the usual reason to use the packed file; a deleted page that PDFium left
+            // in the file is another, whatever the size.
+            return packed is not null && (packed.Length < pdf.Length || pass.LeftPagesBehind) ? packed : pdf;
         }
         catch (Exception e) when (e is FormatException or IndexOutOfRangeException or ArgumentException or InvalidDataException or OverflowException)
         {
@@ -157,6 +160,151 @@ internal static class PackObjects
 
         private sealed record Obj(int Number, int Generation, int ValueStart, int ValueEnd, bool IsStream, int End, List<int> Refs);
 
+        /// <summary>True when the file held deleted pages, or bookmarks leading to them, that were taken out.</summary>
+        public bool LeftPagesBehind { get; private set; }
+
+        private string Text((int Start, int End) span) => Encoding.Latin1.GetString(d, span.Start, span.End - span.Start);
+
+        /// <summary>The object a value refers to when it is just "12 0 R"; otherwise null.</summary>
+        private int? Ref((int Start, int End) span)
+        {
+            var parts = Text(span).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            return parts.Length == 3 && parts[2] == "R" && int.TryParse(parts[0], out int n) && n >= 0 ? n : null;
+        }
+
+        private Dictionary<string, (int Start, int End)>? Dict(Obj? o) => o is not null && At(o.ValueStart, "<<") ? Entries(o.ValueStart, out _) : null;
+
+        /// <summary>A value, or what it refers to when it is a reference to something that is not a stream.</summary>
+        private (int Start, int End)? Resolved((int Start, int End) span, Dictionary<int, Obj> objects) =>
+            Ref(span) is { } n ? (objects.TryGetValue(n, out var o) && !o.IsStream ? (o.ValueStart, o.ValueEnd) : null) : span;
+
+        private List<int> RefsIn((int Start, int End) span)
+        {
+            _refs.Clear();
+            if (d[span.Start] is (byte)'[' or (byte)'<') Value(span.Start);
+            return _refs.ToList();
+        }
+
+        private static byte[] Rebuilt(Dictionary<string, (int Start, int End)> entries, Dictionary<string, string?> changes, byte[] d)
+        {
+            var sb = new StringBuilder("<<");
+            foreach (var (key, (start, end)) in entries)
+            {
+                if (changes.ContainsKey(key)) continue;
+                sb.Append(key).Append(' ').Append(Encoding.Latin1.GetString(d, start, end - start)).Append(' ');
+            }
+            foreach (var (key, value) in changes) if (value is not null) sb.Append(key).Append(' ').Append(value).Append(' ');
+            return Encoding.Latin1.GetBytes(sb.Append(">>").ToString());
+        }
+
+        /// <summary>
+        /// Pages the file still holds though they are no longer in the document's page tree. PDFium
+        /// takes a deleted page out of the tree, but anything that still points at it (a bookmark,
+        /// a link, a named destination) keeps the page and all its content in the saved file.
+        /// </summary>
+        private HashSet<int> PagesOutsideTheTree(Dictionary<int, Obj> objects, Dictionary<string, (int Start, int End)>? root)
+        {
+            var dead = new HashSet<int>();
+            if (root is null || !root.TryGetValue("/Pages", out var pagesSpan) || Ref(pagesSpan) is not { } top) return dead;
+            var inTree = new HashSet<int>();
+            var stack = new Stack<int>();
+            stack.Push(top);
+            while (stack.Count > 0)
+            {
+                int n = stack.Pop();
+                if (!inTree.Add(n) || Dict(objects.GetValueOrDefault(n)) is not { } node) continue;
+                if (node.TryGetValue("/Kids", out var kids) && Resolved(kids, objects) is { } list) foreach (int kid in RefsIn(list)) stack.Push(kid);
+            }
+            if (inTree.Count < 2) return dead; // no pages found: the tree was not understood, so judge nothing
+            foreach (var o in objects.Values)
+                if (!o.IsStream && !inTree.Contains(o.Number) && Dict(o) is { } entries && entries.TryGetValue("/Type", out var type) && Text(type) == "/Page")
+                    dead.Add(o.Number);
+            return dead;
+        }
+
+        /// <summary>
+        /// Takes bookmarks that led to a deleted page out of the outline. One that has bookmarks of
+        /// its own beneath it stays as a heading and only loses where it led. Returns the outline
+        /// items that are gone; the rewritten ones are put in <paramref name="rewritten"/>.
+        /// </summary>
+        private HashSet<int> UnhookBookmarks(Dictionary<int, Obj> objects, Dictionary<string, (int Start, int End)> root, HashSet<int> dead, Dictionary<int, byte[]> rewritten)
+        {
+            var gone = new HashSet<int>();
+            if (!root.TryGetValue("/Outlines", out var outlineSpan) || Ref(outlineSpan) is not { } top) return gone;
+            var entries = new Dictionary<int, Dictionary<string, (int Start, int End)>>();
+            var kids = new Dictionary<int, List<int>>();
+            var parent = new Dictionary<int, int>();
+            var order = new List<int>(); // parents before children
+            var queue = new Queue<int>();
+            queue.Enqueue(top);
+            while (queue.Count > 0 && entries.Count < 200000)
+            {
+                int n = queue.Dequeue();
+                if (entries.ContainsKey(n) || Dict(objects.GetValueOrDefault(n)) is not { } item) continue;
+                entries[n] = item;
+                order.Add(n);
+                var list = kids[n] = [];
+                var seen = new HashSet<int>();
+                for (int? c = item.TryGetValue("/First", out var first) ? Ref(first) : null; c is { } child && seen.Add(child) && !entries.ContainsKey(child); )
+                {
+                    if (Dict(objects.GetValueOrDefault(child)) is not { } childEntries) break;
+                    list.Add(child);
+                    parent[child] = n;
+                    queue.Enqueue(child);
+                    c = childEntries.TryGetValue("/Next", out var nextSpan) ? Ref(nextSpan) : null;
+                }
+            }
+
+            bool LeadsToDeadPage(Dictionary<string, (int Start, int End)> item)
+            {
+                (int Start, int End)? dest = item.TryGetValue("/Dest", out var direct) ? Resolved(direct, objects) : null;
+                if (dest is null && item.TryGetValue("/A", out var action) && Resolved(action, objects) is { } a && At(a.Start, "<<")
+                    && Entries(a.Start, out _).TryGetValue("/D", out var target)) dest = Resolved(target, objects);
+                return dest is { } array && d[array.Start] == '[' && RefsIn(array) is { Count: > 0 } refs && dead.Contains(refs[0]);
+            }
+
+            var counts = entries.ToDictionary(e => e.Key, e => e.Value.TryGetValue("/Count", out var c) && int.TryParse(Text(c), out int v) ? v : (int?)null);
+            var changes = new Dictionary<int, Dictionary<string, string?>>();
+            Dictionary<string, string?> Change(int n) => changes.TryGetValue(n, out var c) ? c : changes[n] = [];
+            var relink = new HashSet<int>();
+            foreach (int n in Enumerable.Reverse(order)) // children before parents
+            {
+                if (n == top || !LeadsToDeadPage(entries[n])) continue;
+                if (kids[n].Count > 0)
+                {
+                    Change(n)["/Dest"] = null;
+                    Change(n)["/A"] = null;
+                    continue;
+                }
+                gone.Add(n);
+                int up = parent[n];
+                kids[up].Remove(n);
+                relink.Add(up);
+                // One fewer bookmark showing beneath each open ancestor, or hidden beneath the first closed one.
+                for (int a = up; ; a = parent[a])
+                {
+                    if (counts[a] is not { } count) break;
+                    counts[a] = count > 0 ? count - 1 : count + 1;
+                    Change(a)["/Count"] = counts[a] == 0 ? null : counts[a]!.Value.ToString();
+                    if (count < 0 || !parent.ContainsKey(a)) break;
+                }
+            }
+            foreach (int up in relink)
+            {
+                var list = kids[up];
+                Change(up)["/First"] = list.Count > 0 ? $"{list[0]} 0 R" : null;
+                Change(up)["/Last"] = list.Count > 0 ? $"{list[^1]} 0 R" : null;
+                if (list.Count == 0) Change(up)["/Count"] = null;
+                for (int i = 0; i < list.Count; i++)
+                {
+                    Change(list[i])["/Prev"] = i > 0 ? $"{list[i - 1]} 0 R" : null;
+                    Change(list[i])["/Next"] = i + 1 < list.Count ? $"{list[i + 1]} 0 R" : null;
+                }
+            }
+            foreach (var (n, change) in changes) if (!gone.Contains(n)) rewritten[n] = Rebuilt(entries[n], change, d);
+            return gone;
+        }
+
         public byte[]? Run()
         {
             // Where the cross-reference table is.
@@ -218,6 +366,18 @@ internal static class PackObjects
                 else throw new FormatException("An object does not end as expected.");
             }
 
+            // Pages deleted from the document but still in the file, and the bookmarks that led to them.
+            var rewritten = new Dictionary<int, byte[]>();
+            var rootEntries = Ref(trailer["/Root"]) is { } rootNumber ? Dict(objects.GetValueOrDefault(rootNumber)) : null;
+            var dead = PagesOutsideTheTree(objects, rootEntries);
+            bool pagesLeft = dead.Count > 0;
+            // PDFium itself blanks a deleted page: its object stays, holding nothing ("null"). Whatever
+            // led there leads nowhere now, and is treated the same way.
+            foreach (var o in objects.Values)
+                if (!o.IsStream && o.ValueEnd - o.ValueStart == 4 && At(o.ValueStart, "null")) dead.Add(o.Number);
+            var gone = dead.Count > 0 && rootEntries is not null ? UnhookBookmarks(objects, rootEntries, dead, rewritten) : [];
+            LeftPagesBehind = pagesLeft || gone.Count > 0 || rewritten.Count > 0;
+
             // What can be reached from the trailer; the rest is left behind.
             var keep = new HashSet<int>();
             var toVisit = new Stack<int>();
@@ -249,8 +409,9 @@ internal static class PackObjects
             while (toVisit.Count > 0)
             {
                 int n = toVisit.Pop();
+                if (dead.Contains(n) || gone.Contains(n)) continue; // anything still pointing at these now points at nothing
                 if (!keep.Add(n) || !objects.TryGetValue(n, out var o)) continue;
-                foreach (int r in o.Refs) toVisit.Push(r);
+                foreach (int r in o.Refs) if (!gone.Contains(r)) toVisit.Push(r);
             }
             var kept = objects.Values.Where(o => keep.Contains(o.Number)).OrderBy(o => o.Number).ToList();
             if (kept.Count == 0) return null;
@@ -284,7 +445,8 @@ internal static class PackObjects
                 for (int k = 0; k < group.Count; k++)
                 {
                     index.Append(group[k].Number).Append(' ').Append(body.Position).Append(' ');
-                    body.Write(d, group[k].ValueStart, group[k].ValueEnd - group[k].ValueStart);
+                    if (rewritten.TryGetValue(group[k].Number, out var changed)) body.Write(changed);
+                    else body.Write(d, group[k].ValueStart, group[k].ValueEnd - group[k].ValueStart);
                     body.WriteByte((byte)'\n');
                     where[group[k].Number] = (2, next, k);
                 }

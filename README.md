@@ -125,7 +125,7 @@ Scrolling past the end of a page carries on to the next page. The page list on t
 
 **Open** also accepts RTF files: the document is laid out as a new PDF (named after the RTF file, not saved until you save it). **Insert file** adds the pages of a PDF or an RTF document after the current page. Anything that could not be imported is listed after the import.
 
-Page buttons add a blank page, insert another PDF's pages, delete, rotate and reorder the current page. Undo/redo (Ctrl+Z / Ctrl+Y) covers every change. Ctrl+mouse wheel zooms.
+Page buttons add a blank page, insert another PDF's pages, delete, rotate and reorder the current page. Deleting a page also removes the links on other pages that led to it, and takes the bookmarks that led to it out of the saved file; a bookmark that still has others beneath it stays as a heading. Undo/redo (Ctrl+Z / Ctrl+Y) covers every change. Ctrl+mouse wheel zooms.
 
 ## What the engine does
 
