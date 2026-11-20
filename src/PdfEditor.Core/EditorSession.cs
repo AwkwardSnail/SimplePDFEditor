@@ -49,7 +49,7 @@ public sealed class EditorSession : IDisposable
     /// <summary>Runs an edit as one undoable step. If the edit throws, the document is left as it was.</summary>
     public void Apply(Action<PdfDocument> edit)
     {
-        byte[] before = Document.ToBytes();
+        byte[] before = Document.Snapshot();
         try { edit(Document); }
         catch
         {
@@ -66,7 +66,7 @@ public sealed class EditorSession : IDisposable
     public void Undo()
     {
         if (!CanUndo) return;
-        _redo.Push(Document.ToBytes());
+        _redo.Push(Document.Snapshot());
         Replace(_undo.Last!.Value);
         _undo.RemoveLast();
         IsModified = true;
@@ -76,7 +76,7 @@ public sealed class EditorSession : IDisposable
     public void Redo()
     {
         if (!CanRedo) return;
-        _undo.AddLast(Document.ToBytes());
+        _undo.AddLast(Document.Snapshot());
         Replace(_redo.Pop());
         IsModified = true;
         Changed?.Invoke(this, EventArgs.Empty);

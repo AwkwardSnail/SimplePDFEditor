@@ -81,6 +81,17 @@ public sealed unsafe partial class PdfDocument : IDisposable
         finally { handle.Free(); }
     }
 
+    /// <summary>
+    /// The document as it stands, to go back to later (Undo). Written as PDFium writes it, without
+    /// the packing a saved file gets: a copy is made before every change, and need not be small.
+    /// </summary>
+    internal byte[] Snapshot()
+    {
+        using var ms = new MemoryStream();
+        SaveAsPdfiumWritesIt(ms);
+        return ms.ToArray();
+    }
+
     public byte[] ToBytes()
     {
         using var ms = new MemoryStream();

@@ -131,7 +131,7 @@ internal sealed class PageInstructions
             else if (contents is { Kind: Kind.Array }) streams.AddRange(contents.Items);
             foreach (var reference in streams)
             {
-                if (reference.Kind != Kind.Ref || !file.Objects.TryGetValue(reference.RefNumber, out var stream) || stream.StreamStart < 0) continue;
+                if (reference.Kind != Kind.Ref || !file.TryGet(reference.RefNumber, out var stream) || stream.StreamStart < 0) continue;
                 byte[]? unpacked = file.StreamData(stream.Value, stream.Source, stream.StreamStart);
                 if (unpacked is null) { problem = "a content stream is packed in a way that is not read here"; return null; }
                 if (data.Length > 0) data.WriteByte((byte)'\n');

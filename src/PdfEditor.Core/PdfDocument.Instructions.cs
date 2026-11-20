@@ -102,7 +102,7 @@ public sealed unsafe partial class PdfDocument
                 SaveAsPdfiumWritesIt(ms);
                 plain = ms.ToArray();
             }
-            var file = PdfFile.Open(plain);
+            var file = PdfFile.Open(plain, readAll: false); // only the page's own objects are needed
             if (file.Trailer?["Encrypt"] is not null) { RewrittenEdits++; return false; }
             var read = PageInstructions.Read(file, pageIndex, out _);
             if (read is null || read.ContentObjects.Count == 0 || read.PageObject < 0) { RewrittenEdits++; return false; }
@@ -199,7 +199,7 @@ public sealed unsafe partial class PdfDocument
                 SaveAsPdfiumWritesIt(ms);
                 plain = ms.ToArray();
             }
-            var file = PdfFile.Open(plain);
+            var file = PdfFile.Open(plain, readAll: false); // only the page's own objects are needed
             if (file.Trailer?["Encrypt"] is not null) throw new PdfException("The order of comments and highlights cannot be changed in a password-protected file.");
             var read = PageInstructions.Read(file, pageIndex, out _) ?? throw new PdfException("The page could not be read to change the order.");
             var listed = read.PageNode["Annots"];

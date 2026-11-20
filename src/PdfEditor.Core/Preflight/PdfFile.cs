@@ -195,13 +195,71 @@ internal sealed class PdfFile(byte[] pdf)
     public sealed record Loaded(Node Value, byte[] Source, int StreamStart, int Generation);
 
     public Dictionary<int, Entry> Entries => _entries;
-    public Dictionary<int, Loaded> Objects => _objects;
+    /// <summary>Every object in the file. Asking for this reads them all; <see cref="TryGet"/> reads only the one asked for.</summary>
+    public Dictionary<int, Loaded> Objects
+    {
+        get
+        {
+            if (!_allLoaded) LoadObjects();
+            return _objects;
+        }
+    }
     public Node? Trailer => _trailer;
     public bool TrailerIsStream => _trailerIsStream;
     public int LastXref => _lastXref;
 
     private readonly Dictionary<int, Entry> _entries = [];
     private readonly Dictionary<int, Loaded> _objects = [];
+    private bool _allLoaded;
+    private readonly HashSet<int> _unreadable = [];
+    // Object streams already unpacked: their data, where each object in them starts, and where the objects begin.
+    private readonly Dictionary<int, (byte[] Data, (int Number, int Offset)[] Places, int First)?> _packs = [];
+
+    /// <summary>
+    /// One object of the file, read when it is first asked for. An edit to one page needs a few
+    /// dozen of a file's objects, not the thousands a large file holds.
+    /// </summary>
+    public bool TryGet(int number, out Loaded loaded)
+    {
+        if (_objects.TryGetValue(number, out loaded!)) return true;
+        if (_allLoaded || _unreadable.Contains(number) || !_entries.TryGetValue(number, out var entry)) return false;
+        try
+        {
+            if (entry.Type == 1 && entry.A > 0 && entry.A < pdf.Length)
+            {
+                var (n, _, value, streamStart) = new Reader(pdf, entry.A).ReadIndirect();
+                if (n == number)
+                {
+                    _objects[number] = loaded = new Loaded(value, pdf, streamStart, entry.B);
+                    return true;
+                }
+            }
+            else if (entry.Type == 2 && entry.A != number)
+            {
+                if (!_packs.TryGetValue(entry.A, out var pack))
+                {
+                    pack = null;
+                    if (TryGet(entry.A, out var holder) && holder.StreamStart >= 0 && holder.Value["Type"]?.Name == "ObjStm" && StreamData(holder.Value, pdf, holder.StreamStart) is { } data)
+                    {
+                        int count = holder.Value["N"]!.Int;
+                        var header = new Reader(data, 0);
+                        var places = new (int Number, int Offset)[count];
+                        for (int i = 0; i < count; i++) places[i] = (header.ReadInt(), header.ReadInt());
+                        pack = (data, places, holder.Value["First"]!.Int);
+                    }
+                    _packs[entry.A] = pack;
+                }
+                if (pack is { } p && entry.B >= 0 && entry.B < p.Places.Length && p.Places[entry.B].Number == number)
+                {
+                    _objects[number] = loaded = new Loaded(new Reader(p.Data, p.First + p.Places[entry.B].Offset).ReadObject(), p.Data, -1, 0);
+                    return true;
+                }
+            }
+        }
+        catch (Exception e) when (e is FormatException or InvalidDataException or NullReferenceException or IndexOutOfRangeException) { }
+        _unreadable.Add(number);
+        return false;
+    }
     private Node? _trailer;          // of the newest part of the file
     private bool _trailerIsStream;   // the newest cross-reference is a stream, not a table
     private int _lastXref;
@@ -210,7 +268,8 @@ internal sealed class PdfFile(byte[] pdf)
     /// Reads a whole file: by its cross-reference table, or, when that is missing or damaged, by
     /// looking for every "12 0 obj" in it (as PDF readers do to repair such a file).
     /// </summary>
-    public static PdfFile Open(byte[] bytes)
+    /// <param name="readAll">False to read each object only when it is asked for (see <see cref="TryGet"/>).</param>
+    public static PdfFile Open(byte[] bytes, bool readAll = true)
     {
         var file = new PdfFile(bytes);
         try { file.ReadCrossReferences(); }
@@ -219,7 +278,7 @@ internal sealed class PdfFile(byte[] pdf)
             file.FindObjectsBySearching();
         }
         if (file._trailer is null) file.FindObjectsBySearching();
-        file.LoadObjects();
+        if (readAll) file.LoadObjects();
         return file;
     }
 
@@ -512,6 +571,7 @@ internal sealed class PdfFile(byte[] pdf)
 
     public void LoadObjects()
     {
+        _allLoaded = true;
         foreach (var (number, entry) in _entries)
         {
             if (entry.Type != 1 || entry.A <= 0 || entry.A >= pdf.Length) continue;
@@ -550,7 +610,7 @@ internal sealed class PdfFile(byte[] pdf)
     {
         for (int hops = 0; node is { Kind: Kind.Ref } && hops < 8; hops++)
         {
-            if (!_objects.TryGetValue(node.RefNumber, out var target)) return (null, null);
+            if (!TryGet(node.RefNumber, out var target)) return (null, null);
             (node, source) = (target.Value, target.Source);
         }
         return (node, source);
