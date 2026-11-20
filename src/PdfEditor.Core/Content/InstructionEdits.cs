@@ -34,10 +34,46 @@ internal static class InstructionEdits
         var edits = new List<Edit>();
         foreach (var change in changes)
         {
+            if (change.Item < 0 || change.Item >= page.Items.Count) return null;
+            // Boxed in where it is drawn, an item moves but the clip it is drawn under does not. If it
+            // would be cut by that clip at its new place, it is drawn outside the clipped section
+            // instead, with its clip moved along with it.
+            if (change.Transform is { } move && facts.Bounds(change.Item) is { } b)
+            {
+                var moved = move.MapBounds(b.Left, b.Bottom, b.Right, b.Top);
+                if (!page.Items[change.Item].Clip.LeavesWhole(moved.X, moved.Y, moved.Right, moved.Bottom))
+                {
+                    if (OutOfItsClip(page, change.Item, move, (moved.X, moved.Y, moved.Right, moved.Bottom), facts) is not { } pair) return null;
+                    edits.AddRange(pair);
+                    continue;
+                }
+            }
             if (EditFor(page, change, facts) is not { } edit) return null;
             edits.Add(edit);
         }
         return Applied(page, edits);
+    }
+
+    /// <summary>
+    /// An item moved to a place where the clip it is drawn under would cut it. It is taken out
+    /// where it is and drawn just after the nearest saved-state section whose surroundings leave
+    /// it whole, in a box in which its space, its clips and its settings are given again, all
+    /// moved by the same amount: the clip goes with the item, as it does when PDFium moves one.
+    /// </summary>
+    private static Edit[]? OutOfItsClip(PageInstructions page, int index, Affine move, (double Left, double Bottom, double Right, double Top) movedBounds, Facts facts)
+    {
+        var item = page.Items[index];
+        if (item.ClipsToo || item.State.CannotBeRepeated || item.InTextBlock && item.Kind != ItemKind.Text) return null;
+        if (Alone(page, item, index, facts) is not { } drawn) return null;
+        if (EditFor(page, new Change(index, null), facts) is not { } removal) return null;
+        foreach (var section in item.Sections.Reverse())
+        {
+            if (section.InTextBlock || section.End < 0) continue;
+            if (!section.Clip.LeavesWhole(movedBounds.Left, movedBounds.Bottom, movedBounds.Right, movedBounds.Top)) continue;
+            if (SettingsFor(item, section.State, section.Space, section.Clip, movedBounds, move) is not { } settings) continue;
+            return [removal, new Edit(section.End, section.End, Encoding.Latin1.GetBytes($"q {settings}{drawn} Q"))];
+        }
+        return null;
     }
 
     /// <summary>
@@ -144,6 +180,60 @@ internal static class InstructionEdits
                 }
             }
             catch (PdfException) { return null; }
+        }
+        return Applied(page, edits);
+    }
+
+    /// <summary>
+    /// A new look for a shape: its filling and its line. Whatever is left null stays as it is.
+    /// </summary>
+    public sealed record Look(int Item, PdfColor? Fill = null, bool? Filled = null, PdfColor? Line = null, double? Width = null, bool? Outlined = null);
+
+    /// <summary>
+    /// The page's instructions with shapes given another filling or line. The shape's own path is
+    /// kept as written; the colours and width are set just for it, and the instruction that paints
+    /// it is replaced by the one for the new combination of filling and outline.
+    /// </summary>
+    public static byte[]? Repaint(PageInstructions page, IReadOnlyList<Look> looks)
+    {
+        var edits = new List<Edit>();
+        foreach (var look in looks)
+        {
+            if (look.Item < 0 || look.Item >= page.Items.Count) return null;
+            var item = page.Items[look.Item];
+            if (item.Kind != ItemKind.Path || item.InTextBlock) return null;
+            if (look.Fill is { A: not 255 } || look.Line is { A: not 255 }) return null; // see-through colours need a named setting
+
+            // What the painting instruction says now: filled (and by which rule), outlined, closed first.
+            string op = item.Operator;
+            bool filled = op is "f" or "F" or "f*" or "B" or "B*" or "b" or "b*", evenOdd = op.EndsWith('*');
+            bool outlined = op is "S" or "s" or "B" or "B*" or "b" or "b*", closes = op is "s" or "b" or "b*";
+            filled = look.Filled ?? filled;
+            outlined = look.Outlined ?? outlined;
+            string paint = filled && outlined ? (closes ? "b" : "B") + (evenOdd ? "*" : "")
+                : filled ? (evenOdd ? "f*" : "f")
+                : outlined ? (closes ? "s" : "S")
+                : "n";
+
+            var settings = new StringBuilder();
+            if (look.Fill is { } fill) settings.Append($"{Number(fill.R / 255.0, 4)} {Number(fill.G / 255.0, 4)} {Number(fill.B / 255.0, 4)} rg ");
+            if (look.Line is { } line) settings.Append($"{Number(line.R / 255.0, 4)} {Number(line.G / 255.0, 4)} {Number(line.B / 255.0, 4)} RG ");
+            if (look.Width is { } width) settings.Append($"{Number(width, 4)} w ");
+            string path = Encoding.Latin1.GetString(page.Data, item.Start, item.OperatorAt - item.Start);
+
+            string with;
+            if (!item.ClipsToo) with = $"q {settings}{path} {paint} Q"; // boxed in: the settings end with the shape
+            else
+            {
+                // The shape also clips what follows, which a box would undo; the settings are put back by hand instead.
+                var state = item.State;
+                var back = new StringBuilder();
+                if (look.Fill is not null) back.Append(state.FillSpace is null && state.FillColour is null ? "0 g" : $"{state.FillSpace} {state.FillColour}".Trim()).Append(' ');
+                if (look.Line is not null) back.Append(state.StrokeSpace is null && state.StrokeColour is null ? "0 G" : $"{state.StrokeSpace} {state.StrokeColour}".Trim()).Append(' ');
+                if (look.Width is not null) back.Append(state.LineWidth ?? "1 w").Append(' ');
+                with = $"{settings}{path} {paint} {back}";
+            }
+            edits.Add(new Edit(item.Start, item.End, Encoding.Latin1.GetBytes(with)));
         }
         return Applied(page, edits);
     }
@@ -305,25 +395,28 @@ internal static class InstructionEdits
     /// force, put in force everything <paramref name="item"/> was drawn with. Only what differs is written.
     /// Null when the difference cannot be made up (a setting that cannot be taken back).
     /// </summary>
-    private static string? SettingsFor(DrawnItem item, DrawState theirs, Affine space, Clip clip, (double Left, double Bottom, double Right, double Top)? bounds)
+    /// <param name="move">When given, the item (with its clips) is to be drawn moved by this, in the page's coordinates.</param>
+    private static string? SettingsFor(DrawnItem item, DrawState theirs, Affine space, Clip clip, (double Left, double Bottom, double Right, double Top)? bounds, Affine? move = null)
     {
         var sb = new StringBuilder();
         DrawState mine = item.State;
         try
         {
-            // The space: from the one in force at the new point to the one the item was drawn in.
+            // The space: from the one in force at the new point to the one the item was drawn in
+            // (followed by the move, when there is one).
             var current = space;
-            void Into(Affine space)
+            void Into(Affine wanted)
             {
-                var step = Affine.Concat(space, current.Invert());
+                if (move is { } m) wanted = Affine.Concat(wanted, m);
+                var step = Affine.Concat(wanted, current.Invert());
                 if (!IsIdentity(step)) sb.Append(Matrix(step)).Append(" cm ");
-                current = space;
+                current = wanted;
             }
 
             // The clip can only be narrowed. Where the new point is clipped by something the item was
             // not under, the item must fit inside that clip whole; then all its own clips are given.
             int shared = 0;
-            while (shared < mine.Clips.Count && shared < theirs.Clips.Count && mine.Clips[shared] == theirs.Clips[shared]) shared++;
+            while (move is null && shared < mine.Clips.Count && shared < theirs.Clips.Count && mine.Clips[shared] == theirs.Clips[shared]) shared++;
             if (shared < theirs.Clips.Count)
             {
                 if (bounds is not { } b || !clip.LeavesWhole(b.Left, b.Bottom, b.Right, b.Top)) return null;

@@ -176,6 +176,30 @@ public sealed unsafe partial class PdfDocument
     /// </summary>
     public int SetShapeFill(int pageIndex, IEnumerable<int> objectIndices, PdfColor? fill)
     {
+        objectIndices = objectIndices.Distinct().ToList();
+        // First choice: in the page's own instructions, changing only how each shape is painted.
+        var looks = new List<Content.InstructionEdits.Look>();
+        using (var look = OpenPage(pageIndex))
+        {
+            foreach (int index in objectIndices)
+            {
+                var obj = GetObject(look, index);
+                if (Native.FPDFPageObj_GetType(obj) != PageObjectPath || !TakesFill(obj)) continue;
+                int had = 0, line = 0;
+                Native.FPDFPath_GetDrawMode(obj, &had, &line);
+                if (fill is { } colour) looks.Add(new(index, Fill: colour, Filled: true));
+                else if (had != 0)
+                {
+                    // A shape that was only a filled area keeps an outline in its old colour, so it does not vanish.
+                    uint r = 0, g = 0, b = 0, a = 255;
+                    Native.FPDFPageObj_GetFillColor(obj, &r, &g, &b, &a);
+                    looks.Add(line != 0 ? new(index, Filled: false) : new(index, Filled: false, Line: new PdfColor((byte)r, (byte)g, (byte)b), Width: 1, Outlined: true));
+                }
+            }
+        }
+        if (looks.Count == 0) return 0;
+        if (TryRewriteInstructions(pageIndex, (read, _) => Content.InstructionEdits.Repaint(read, looks))) return looks.Count;
+
         using var page = OpenPage(pageIndex);
         int changed = 0;
         foreach (var obj in objectIndices.Distinct().Select(i => GetObject(page, i)).ToList())

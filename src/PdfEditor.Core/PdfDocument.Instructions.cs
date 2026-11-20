@@ -33,15 +33,7 @@ public sealed unsafe partial class PdfDocument
             foreach (int index in objectIndices.Distinct())
             {
                 if (index < 0 || index >= read.Items.Count) throw new ArgumentOutOfRangeException(nameof(objectIndices));
-                var transform = changeFor(index);
-                if (transform is { } t)
-                {
-                    // Boxed in where it is drawn, the item moves but its clip does not: it must still fit inside.
-                    if (facts.Bounds(index) is not { } b) return null;
-                    var moved = t.MapBounds(b.Left, b.Bottom, b.Right, b.Top);
-                    if (!read.Items[index].Clip.LeavesWhole(moved.X, moved.Y, moved.Right, moved.Bottom)) return null;
-                }
-                changes.Add(new InstructionEdits.Change(index, transform));
+                changes.Add(new InstructionEdits.Change(index, changeFor(index)));
             }
             return InstructionEdits.Apply(read, changes, facts);
         });

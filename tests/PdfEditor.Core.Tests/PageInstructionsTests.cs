@@ -223,19 +223,58 @@ public unsafe class PageInstructionsTests
     }
 
     [Fact]
-    public void A_clipped_item_moved_out_of_its_clip_goes_the_older_way_and_stays_visible()
+    public void A_clipped_item_moved_out_of_its_clip_takes_its_clip_along()
     {
-        // The red square sits inside a clip just larger than itself; moved 100 to the right it would be cut away.
-        byte[] pdf = Page("q 40 40 60 60 re W n 1 0 0 rg 50 50 40 40 re f Q");
+        // The red square is drawn under a clip that cuts it (it shows from 60 to 90 only, not 50 to 90),
+        // beside a blue square under the same clip. Moved 100 to the right, the red one would be cut away
+        // entirely if its clip stayed behind.
+        byte[] pdf = Page("q 60 40 60 60 re W n 1 0 0 rg 50 50 40 40 re f 0 0 1 rg 95 50 20 20 re f Q 0 1 0 rg 20 200 20 20 re f");
         using var doc = PdfDocument.Open(pdf);
-        var red = doc.GetDrawings(0).Single(d => Math.Abs(d.Bounds.Width - 40) < 1);
-        int rewritten = PdfDocument.RewrittenEdits;
-        doc.MoveObjects(0, red.ObjectIndices, 100, 0);
-        Assert.Equal(rewritten + 1, PdfDocument.RewrittenEdits);
+        var before = doc.Render(0, 1, false);
+        Assert.Equal((255, 255, 255), Colour(before, 55, 70)); // cut off there
+        Assert.Equal((255, 0, 0), Colour(before, 70, 70));
+        int direct = PdfDocument.DirectEdits;
+        doc.MoveObjects(0, [1], 100, 0);
+        Assert.Equal(direct + 1, PdfDocument.DirectEdits);
         using var again = PdfDocument.Open(doc.ToBytes());
         var page = again.Render(0, 1, false);
-        int i = (300 - 70) * page.Stride + 170 * 4;
-        Assert.Equal((255, 0, 0), (page.Pixels[i + 2], page.Pixels[i + 1], page.Pixels[i])); // still seen, at its new place
+        Assert.Equal((255, 0, 0), Colour(page, 170, 70));      // seen at its new place
+        Assert.Equal((255, 255, 255), Colour(page, 155, 70));  // and still cut where its clip cut it: the clip moved with it
+        Assert.Equal((255, 255, 255), Colour(page, 70, 70));   // gone from where it was
+        Assert.Equal((0, 0, 255), Colour(page, 100, 60));      // the blue square under the same clip is untouched
+        Assert.Equal((0, 255, 0), Colour(page, 30, 210));
+        Assert.Equal(AsPdfiumSeesIt(doc, 0).Count, AsPdfiumSeesIt(again, 0).Count);
+    }
+
+    [Fact]
+    public void Text_moved_out_of_its_clip_stays_whole_and_the_text_after_it_stays_put()
+    {
+        // A column of text drawn under a clip the width of the column; one piece is moved out to the right.
+        byte[] pdf = TextPage("q 30 100 120 150 re W n BT /F1 12 Tf 14 TL 35 220 Td (one ) Tj (two) Tj T* (three) Tj ET Q");
+        using var doc = PdfDocument.Open(pdf);
+        var places = Pieces(doc);
+        static int Ink(RenderedPage page, PdfRect area)
+        {
+            int n = 0;
+            for (int y = (int)area.Y; y < (int)area.Bottom; y++)
+                for (int x = (int)area.X; x < (int)area.Right; x++)
+                    if (page.Pixels[y * page.Stride + x * 4] < 235) n++;
+            return n;
+        }
+        int inkBefore = Ink(doc.Render(0, 1, false), places[0].Bounds);
+        Assert.True(inkBefore > 20);
+        int direct = PdfDocument.DirectEdits;
+        doc.MoveObject(0, doc.GetTextRuns(0)[0].ObjectIndex, 150, 0);
+        Assert.Equal(direct + 1, PdfDocument.DirectEdits);
+        using var again = PdfDocument.Open(doc.ToBytes());
+        var now = Pieces(again);
+        Assert.Equal(3, now.Count);
+        AssertSamePlace((places[0].Text, new PdfRect(places[0].Bounds.X + 150, places[0].Bounds.Y, places[0].Bounds.Width, places[0].Bounds.Height)), now.Single(p => p.Text.Trim() == "one"), "the moved piece");
+        AssertSamePlace(places[1], now.Single(p => p.Text.Trim() == "two"), "the piece after it");
+        AssertSamePlace(places[2], now.Single(p => p.Text.Trim() == "three"), "the next line");
+        // It really shows there (it was not cut away by the column's clip).
+        int inkAfter = Ink(again.Render(0, 1, false), now.Single(p => p.Text.Trim() == "one").Bounds);
+        Assert.InRange(inkAfter, inkBefore * 0.9, inkBefore * 1.1);
     }
     // ------------------------------------------------------------------ text, where pieces share a writing position
 
@@ -507,5 +546,42 @@ public unsafe class PageInstructionsTests
         Assert.True(saved.MoveLayer(0, [1], up: true));
         using var back = PdfDocument.Open(saved.ToBytes());
         Assert.Equal(0, Differing(before, back.Render(0, 1, false)));
+    }
+    // ------------------------------------------------------------------ the filling and line of shapes
+
+    [Fact]
+    public void A_shapes_filling_and_line_are_changed_without_touching_the_rest()
+    {
+        // A CMYK square (which PDFium would turn into RGB), then: a stroked box, a filled box drawn
+        // by the even-odd rule with a hole in it, and a filled-only circle-ish shape.
+        byte[] pdf = Page("0 1 1 0 k 20 20 40 40 re f " +
+                          "0 0 1 RG 3 w 60 200 60 40 re S " +
+                          "0 0.6 0 rg 150 200 80 60 re 170 215 40 30 re f* " +
+                          "0.8 0.2 0.2 rg 60 100 m 120 100 l 90 150 l h f");
+        using var doc = PdfDocument.Open(pdf);
+        int direct = PdfDocument.DirectEdits;
+        var yellow = new PdfColor(255, 235, 60);
+
+        Assert.Equal(1, doc.SetShapeFill(0, [2], yellow));              // the stroked box gets a filling
+        Assert.Equal(1, doc.SetShapeFill(0, [3], yellow));              // the box with a hole changes colour, keeping its hole
+        Assert.Equal(1, doc.SetShapeFill(0, [4], null));                // the triangle becomes see-through, keeping an outline
+        Assert.Equal(1, doc.SetShapeLine(0, [2], new PdfColor(200, 30, 30), 6));
+        Assert.Equal(direct + 4, PdfDocument.DirectEdits);
+
+        byte[] saved = doc.ToBytes();
+        using var again = PdfDocument.Open(saved);
+        var page = again.Render(0, 1, false);
+        Assert.Equal((255, 235, 60), Colour(page, 90, 220));            // the first box is filled
+        Assert.Equal((200, 30, 30), Colour(page, 60, 220));             // and its line is red and thick now
+        Assert.Equal((255, 235, 60), Colour(page, 160, 205));           // the second box is yellow
+        Assert.Equal((255, 255, 255), Colour(page, 190, 230));          // with its hole still a hole
+        Assert.Equal((255, 255, 255), Colour(page, 90, 115));           // the triangle is see-through
+        var edge = Colour(page, 90, 100);                               // with a thin outline in the colour it had (blended at a point wide)
+        Assert.True(edge.R > edge.G + 50 && edge.G == edge.B, $"the outline is {edge}");
+        Assert.Contains("0 1 1 0 k", PdfDocumentTests.Unpacked(saved));  // and the CMYK square is still CMYK
+
+        var style = again.GetShapeStyle(0, 2)!;
+        Assert.Equal((new PdfColor(200, 30, 30), 6.0, yellow), (style.Stroke, style.Width, style.Fill!.Value));
+        Assert.Equal(5, AsPdfiumSeesIt(again, 0).Count);
     }
 }

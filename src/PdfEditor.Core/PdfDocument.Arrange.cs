@@ -161,6 +161,24 @@ public sealed unsafe partial class PdfDocument
     public int SetShapeLine(int pageIndex, IEnumerable<int> objectIndices, PdfColor colour, double width)
     {
         if (width <= 0 || width > 200) throw new ArgumentOutOfRangeException(nameof(width), "The line thickness must be between 0 and 200 points.");
+        objectIndices = objectIndices.Distinct().ToList();
+        // First choice: in the page's own instructions, changing only how each shape is painted.
+        var looks = new List<InstructionEdits.Look>();
+        using (var look = OpenPage(pageIndex))
+        {
+            foreach (int index in objectIndices)
+            {
+                var obj = GetObject(look, index);
+                if (Native.FPDFPageObj_GetType(obj) != PageObjectPath) continue;
+                int had = 0, line = 0;
+                Native.FPDFPath_GetDrawMode(obj, &had, &line);
+                // The solid part of a shape that takes no fill of its own (an arrow's head) belongs to its line.
+                looks.Add(new(index, Line: colour, Width: width, Outlined: true, Fill: had != 0 && !TakesFill(obj) ? colour : null));
+            }
+        }
+        if (looks.Count == 0) return 0;
+        if (TryRewriteInstructions(pageIndex, (read, _) => InstructionEdits.Repaint(read, looks))) return looks.Count;
+
         using var page = OpenPage(pageIndex);
         int changed = 0;
         foreach (var obj in objectIndices.Distinct().Select(i => GetObject(page, i)).ToList())
