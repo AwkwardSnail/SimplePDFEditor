@@ -1142,6 +1142,34 @@ public class PdfDocumentTests
         Assert.All(paragraphs, p => Assert.Equal(1, p.LineCount));
     }
 
+    [Fact]
+    public void A_saved_file_has_its_small_objects_packed_and_reads_back_the_same()
+    {
+        using var doc = PdfDocument.Open(Path.Combine(AppContext.BaseDirectory, "Fixtures", "word-style.pdf"));
+        // Many small objects, as a tagged or much-commented document has.
+        for (int i = 0; i < 150; i++) doc.AddComment(0, 20 + i % 10 * 30, 20 + i / 10 * 30, $"Note number {i}", author: "Test");
+        using var asWritten = new MemoryStream();
+        doc.SaveAsPdfiumWritesIt(asWritten);
+        byte[] saved = doc.ToBytes();
+
+        Assert.True(saved.Length < asWritten.Length * 0.8, $"{asWritten.Length} bytes as PDFium writes it, {saved.Length} saved");
+        string text = System.Text.Encoding.Latin1.GetString(saved);
+        Assert.Contains("/ObjStm", text);
+        Assert.Contains("/XRef", text);
+        Assert.DoesNotContain("Note number 7", text); // packed away, not lying about in plain text
+
+        using var again = PdfDocument.Open(saved);
+        Assert.Equal(doc.PageCount, again.PageCount);
+        Assert.Equal(doc.GetPageText(0), again.GetPageText(0));
+        Assert.Equal(150, again.GetAnnotations(0).Count(a => a.Contents.StartsWith("Note number", StringComparison.Ordinal)));
+        Assert.Equal(doc.Render(0, 1).Pixels, again.Render(0, 1).Pixels);
+
+        // A packed file can be opened, changed and saved again.
+        again.AddText(0, 72, 72, "Added later");
+        using var third = PdfDocument.Open(again.ToBytes());
+        Assert.Contains("Added later", third.GetPageText(0));
+    }
+
     private static int PixelsThatDiffer(RenderedPage a, RenderedPage b, PdfRect area)
     {
         int changed = 0;

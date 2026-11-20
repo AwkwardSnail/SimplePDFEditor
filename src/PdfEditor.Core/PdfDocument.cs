@@ -62,6 +62,15 @@ public sealed unsafe partial class PdfDocument : IDisposable
 
     public void Save(Stream stream)
     {
+        // PDFium writes every object out in plain text; packing them again keeps files with many
+        // small objects from growing by half just for being saved (see PackObjects).
+        using var plain = new MemoryStream();
+        SaveAsPdfiumWritesIt(plain);
+        stream.Write(Preflight.PackObjects.Apply(plain.ToArray()));
+    }
+
+    internal void SaveAsPdfiumWritesIt(Stream stream)
+    {
         var handle = GCHandle.Alloc(stream);
         try
         {
