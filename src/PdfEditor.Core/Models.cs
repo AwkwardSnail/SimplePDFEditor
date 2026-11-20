@@ -41,7 +41,13 @@ public sealed record TextStyle
 }
 
 /// <summary>One piece of existing text on a page (PDFs store text as separate positioned runs).</summary>
-public sealed record TextRun(int ObjectIndex, string Text, PdfRect Bounds, string FontName, float FontSize, PdfColor Color);
+public sealed record TextRun(int ObjectIndex, string Text, PdfRect Bounds, string FontName, float FontSize, PdfColor Color)
+{
+    /// <summary>The size of the letters as they are seen on the page, in points (the font's size after any scaling).</summary>
+    public double VisibleSize { get; init; }
+    /// <summary>How far the text is turned as seen, in degrees clockwise; 0 for ordinary level text.</summary>
+    public double Angle { get; init; }
+}
 
 /// <summary>An image placed on a page.</summary>
 public sealed record ImageInfo(int ObjectIndex, PdfRect Bounds, int PixelWidth, int PixelHeight);

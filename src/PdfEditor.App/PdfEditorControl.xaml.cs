@@ -1172,6 +1172,20 @@ public partial class PdfEditorControl : UserControl
         int page = _page;
         // The run's height on the page is a better guide to its visible size than the font's nominal size.
         double size = Math.Max(4, info.Bounds.Height * 0.85);
+        // Turned text: its box is as tall as the line is long, so the size comes from the text itself,
+        // and the editing box is turned the same way, starting at the corner where the line starts.
+        double angle = Math.Abs(info.Angle) < 1 ? 0 : info.Angle, length = info.Bounds.Width;
+        double startX = info.Bounds.X, startY = info.Bounds.Y;
+        if (angle != 0)
+        {
+            if (info.VisibleSize > 0) size = Math.Max(4, info.VisibleSize);
+            double radians = angle * Math.PI / 180, cos = Math.Cos(radians), sin = Math.Sin(radians);
+            length = Math.Abs(cos) * info.Bounds.Width + Math.Abs(sin) * info.Bounds.Height;
+            // The top-left of the line as written: which corner of its box that is depends on the turn.
+            if (sin > 0.5) startX = info.Bounds.Right;                                    // reads down the page
+            else if (sin < -0.5) startY = info.Bounds.Bottom;                             // reads up the page
+            else if (cos < 0) (startX, startY) = (info.Bounds.Right, info.Bounds.Bottom); // upside down
+        }
         var style = new TextStyle
         {
             Font = info.FontName.Contains("Courier", StringComparison.OrdinalIgnoreCase) ? StandardFont.Courier
@@ -1180,15 +1194,15 @@ public partial class PdfEditorControl : UserControl
             Italic = info.FontName.Contains("Italic", StringComparison.OrdinalIgnoreCase) || info.FontName.Contains("Oblique", StringComparison.OrdinalIgnoreCase),
             Color = info.Color,
         };
-        BeginTyping(info.Bounds.X, info.Bounds.Y, info.Text, size, style, multiline: false, text =>
+        BeginTyping(startX, startY, info.Text, size, style, multiline: false, text =>
         {
             if (text == info.Text) return;
             _selection = null; // the run may get a new index, or be removed if the text is now empty
             Edit(d => d.EditText(page, info.ObjectIndex, text));
-        }, minWidth: info.Bounds.Width);
+        }, minWidth: length, angle: angle);
     }
 
-    private void BeginTyping(double x, double y, string initial, double fontSize, TextStyle style, bool multiline, Action<string> commit, double minWidth = 0, double wrapWidth = 0)
+    private void BeginTyping(double x, double y, string initial, double fontSize, TextStyle style, bool multiline, Action<string> commit, double minWidth = 0, double wrapWidth = 0, double angle = 0)
     {
         DiscardEditor();
         var box = new TextBox
@@ -1213,6 +1227,7 @@ public partial class PdfEditorControl : UserControl
         // The text box draws its text 3 units inside its edge; shift it so the text sits where it will land.
         Canvas.SetLeft(box, x * ViewScale - 3);
         Canvas.SetTop(box, y * ViewScale - 1);
+        if (angle != 0) box.RenderTransform = new RotateTransform(angle, 3, 1); // about the point where the text starts
         box.PreviewKeyDown += (_, e) =>
         {
             if (e.Key == Key.Escape) { DiscardEditor(); e.Handled = true; }

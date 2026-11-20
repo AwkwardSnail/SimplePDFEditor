@@ -192,7 +192,18 @@ public sealed unsafe partial class PdfDocument
                 uint r = 0, g = 0, b = 0, a = 255;
                 Native.FPDFPageObj_GetFillColor(obj, &r, &g, &b, &a);
                 string text = textPage == IntPtr.Zero ? "" : ReadObjectText(obj, textPage).TrimEnd('\r', '\n', '\0');
-                runs.Add(new TextRun(i, text, ObjectBounds(page, obj), FontName(obj), size, new PdfColor((byte)r, (byte)g, (byte)b, (byte)a)));
+                // Which way the text runs as seen, and how tall its letters are: from its matrix, through the page's own turn.
+                double angle = 0, visible = size;
+                Native.FS_MATRIX m;
+                if (Native.FPDFPageObj_GetMatrix(obj, &m) != 0)
+                {
+                    var u = page.UserToView;
+                    double alongX = m.a * u.A + m.b * u.C, alongY = m.a * u.B + m.b * u.D;   // the direction of writing
+                    double upX = m.c * u.A + m.d * u.C, upY = m.c * u.B + m.d * u.D;          // one unit of letter height
+                    if (Math.Abs(alongX) + Math.Abs(alongY) > 1e-9) angle = Math.Atan2(alongY, alongX) * 180 / Math.PI;
+                    visible = size * Math.Sqrt(upX * upX + upY * upY);
+                }
+                runs.Add(new TextRun(i, text, ObjectBounds(page, obj), FontName(obj), size, new PdfColor((byte)r, (byte)g, (byte)b, (byte)a)) { VisibleSize = visible, Angle = angle });
             }
         }
         finally { if (textPage != IntPtr.Zero) Native.FPDFText_ClosePage(textPage); }

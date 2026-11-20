@@ -1491,4 +1491,32 @@ public class PdfDocumentTests
     }
 
     private static PdfRect Round(PdfRect r) => new(Math.Round(r.X), Math.Round(r.Y), Math.Round(r.Width), Math.Round(r.Height));
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(90)]
+    public void Turned_text_reports_its_true_size_and_angle_and_can_be_rewritten(int pageRotation)
+    {
+        using var doc = PdfDocument.Create();
+        doc.AddPage(595, 842);
+        doc.SetPageRotation(0, pageRotation);
+        doc.AddText(0, 100, 300, "A line that gets turned", new TextStyle { Size = 12 });
+        var level = Assert.Single(doc.GetTextRuns(0));
+        Assert.Equal(0, level.Angle, 0.5);
+        Assert.Equal(12, level.VisibleSize, 0.01);
+
+        doc.RotateObjects(0, [level.ObjectIndex], clockwise: true);
+        var turned = Assert.Single(doc.GetTextRuns(0));
+        Assert.Equal(90, turned.Angle, 0.5);
+        Assert.Equal(12, turned.VisibleSize, 0.01);
+        Assert.True(turned.Bounds.Height > 60); // its box is as tall as the line is long: no guide to the size
+
+        doc.EditText(0, turned.ObjectIndex, "Rewritten while turned");
+        using var saved = PdfDocument.Open(doc.ToBytes());
+        var after = Assert.Single(saved.GetTextRuns(0));
+        Assert.Equal("Rewritten while turned", after.Text.Trim());
+        Assert.Equal(90, after.Angle, 0.5);
+        Assert.Equal(12, after.VisibleSize, 0.01);
+        Assert.Equal(turned.Bounds.Y, after.Bounds.Y, 1.0); // still starts where it started
+    }
 }
