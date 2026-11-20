@@ -486,7 +486,13 @@ public sealed unsafe partial class PdfDocument
         var words = ToWords(items);
         if (p.Hanging && indent < 0 && words.Count > 1)
             words[1].SpaceBefore = Math.Max(words[1].SpaceBefore, -indent - words[0].Width); // keep the text after a list marker lined up
-        var lines = items.Count == 0 ? [] : Wrap(words, width, indent);
+        // Lines set a little tighter than the fonts' own spacing (as typesetters do to fit a word in) would
+        // not fit again at their natural width, and a paragraph would grow a line though nothing changed.
+        // So words may run that much past the width when wrapping, and are drawn closer together to fit.
+        double tight = 0;
+        if (alignment is TextAlignment.Left or TextAlignment.Justify && p.Alignment is TextAlignment.Left or TextAlignment.Justify)
+            tight = Math.Clamp(p.Lines.Max(l => -PageAnalysis.StretchOf(l, false)), 0, 0.04 * width);
+        var lines = items.Count == 0 ? [] : Wrap(words, width + tight, indent);
         lines.RemoveAll(l => l.Words.Count == 0 && !l.EndsWithHardBreak && lines.Count > 1);
 
         double baseline = p.FirstBaseline;
@@ -495,6 +501,9 @@ public sealed unsafe partial class PdfDocument
             var line = lines[i];
             line.Em = line.Words.SelectMany(w => w.Items).Select(it => it.Style.Em).DefaultIfEmpty(em).Max();
             if (i > 0) baseline += p.Spacing * Math.Max(1, line.Em / em);
+            // A line that had a place before goes back exactly there (the spacing is only an average of the
+            // paragraph's lines), so a paragraph that keeps its number of lines moves nothing below it.
+            if (i < p.Lines.Count && Math.Abs(line.Em - p.Lines[i].Em) <= 0.02 * em && (i == 0 || p.Lines[i].Baseline > lines[i - 1].Baseline)) baseline = p.Lines[i].Baseline;
             line.Baseline = baseline;
             double available = width - (i == 0 ? indent : 0);
             double start = boxLeft + (i == 0 ? indent : 0);
@@ -505,8 +514,12 @@ public sealed unsafe partial class PdfDocument
                 _ => start,
             };
             bool last = i == lines.Count - 1 || line.EndsWithHardBreak;
-            if (alignment == TextAlignment.Justify && !last && line.Words.Count > 1)
-                line.GapExtra = Math.Max(0, (available - line.Width) / (line.Words.Count - 1));
+            if (line.Words.Count > 1 && (line.Width > available || alignment == TextAlignment.Justify && !last))
+            {
+                line.GapExtra = (available - line.Width) / (line.Words.Count - 1);
+                // Closer together, but never so close that words touch.
+                if (line.GapExtra < 0) line.GapExtra = Math.Max(line.GapExtra, -0.3 * line.Words.Skip(1).Min(w => w.SpaceBefore));
+            }
         }
 
         double oldLast = p.LastBaseline;

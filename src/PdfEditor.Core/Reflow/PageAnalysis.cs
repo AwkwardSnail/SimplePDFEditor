@@ -578,7 +578,7 @@ internal sealed unsafe class PageAnalysis
     }
 
     /// <summary>How much wider a line is than it would be with ordinary spaces between its words.</summary>
-    private static double StretchOf(Line l, bool skipMarker)
+    internal static double StretchOf(Line l, bool skipMarker)
     {
         int start = 0;
         if (skipMarker)

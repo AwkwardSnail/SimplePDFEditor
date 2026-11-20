@@ -1519,4 +1519,74 @@ public class PdfDocumentTests
         Assert.Equal(12, after.VisibleSize, 0.01);
         Assert.Equal(turned.Bounds.Y, after.Bounds.Y, 1.0); // still starts where it started
     }
+
+    [Fact]
+    public void A_paragraph_set_tighter_than_its_font_keeps_its_lines_when_rewritten_with_the_same_words()
+    {
+        // Words placed one by one, with less than a full space between them on the full lines,
+        // as a typesetter does to fit a last word in.
+        string[][] lines = [["alpha", "beta", "gamma", "delta", "epsilon", "zeta"], ["eta", "theta", "iota", "kappa", "lambda", "omega"], ["xi", "omicron"]];
+        using var measure = PdfDocument.Create();
+        measure.AddPage(595, 842);
+        double WidthOf(string word)
+        {
+            measure.AddText(0, 50, 50, word, new TextStyle { Size = 12 });
+            var run = measure.GetTextRuns(0).Last();
+            measure.RemoveObjects(0, [run.ObjectIndex]);
+            return run.Bounds.Width;
+        }
+        double space = WidthOf("a a") - 2 * WidthOf("a");
+
+        using var doc = PdfDocument.Create();
+        doc.AddPage(595, 842);
+        for (int l = 0; l < lines.Length; l++)
+        {
+            double x = 100;
+            foreach (string word in lines[l])
+            {
+                doc.AddText(0, x, 200 + 15 * l, word, new TextStyle { Size = 12 });
+                x += WidthOf(word) + (l < 2 ? 0.75 : 1) * space;
+            }
+        }
+        using var saved = PdfDocument.Open(doc.ToBytes());
+        var paragraph = Assert.Single(saved.GetParagraphs(0));
+        Assert.Equal(3, paragraph.Text.Count(c => c == ' ') >= 13 ? 3 : 0); // read as one paragraph of running text
+        var before = saved.Render(0, 1, false);
+
+        var result = saved.ReplaceParagraphText(0, paragraph.Index, paragraph.Text);
+        Assert.Equal(3, result.LineCount);
+        Assert.Equal(0, result.HeightChange, 0.001);
+        using var again = PdfDocument.Open(saved.ToBytes());
+        Assert.Equal(paragraph.Text, Assert.Single(again.GetParagraphs(0)).Text);
+        Assert.Equal(before.Width, again.Render(0, 1, false).Width);
+    }
+
+    [Fact]
+    public void Rewriting_one_piece_of_text_leaves_the_rest_of_the_page_as_it_was_written()
+    {
+        using var made = PdfDocument.Create();
+        made.AddPage(595, 842);
+        made.AddText(0, 100, 100, "Stays as it is", new TextStyle { Size = 12 });
+        made.AddText(0, 100, 140, "Gets rewritten", new TextStyle { Size = 12, Color = new PdfColor(200, 30, 30) });
+        made.AddText(0, 100, 180, "Also stays", new TextStyle { Size = 12 });
+        using var doc = PdfDocument.Open(made.ToBytes());
+        var target = doc.GetTextRuns(0).Single(r => r.Text.StartsWith("Gets"));
+
+        int direct = PdfDocument.DirectEdits, rewritten = PdfDocument.RewrittenEdits;
+        Assert.Equal(TextEditResult.KeptFont, doc.EditText(0, target.ObjectIndex, "Now reads another line"));
+        Assert.Equal(direct + 1, PdfDocument.DirectEdits); // in the page's own instructions
+        Assert.Equal(rewritten, PdfDocument.RewrittenEdits);
+
+        using var saved = PdfDocument.Open(doc.ToBytes());
+        var runs = saved.GetTextRuns(0);
+        Assert.Equal(["Stays as it is", "Now reads another line", "Also stays"], runs.Select(r => r.Text.Trim()).ToArray()); // same order
+        var now = runs[1];
+        Assert.Equal(target.Bounds.X, now.Bounds.X, 0.5);
+        Assert.Equal(target.Bounds.Bottom, now.Bounds.Bottom, 1.0);
+        Assert.Equal(new PdfColor(200, 30, 30), now.Color);
+
+        // Rewritten to nothing, the piece is taken away.
+        Assert.Equal(TextEditResult.Removed, saved.EditText(0, now.ObjectIndex, ""));
+        Assert.Equal(["Stays as it is", "Also stays"], saved.GetTextRuns(0).Select(r => r.Text.Trim()).ToArray());
+    }
 }

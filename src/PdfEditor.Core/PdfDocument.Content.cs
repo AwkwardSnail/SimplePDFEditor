@@ -221,6 +221,63 @@ public sealed unsafe partial class PdfDocument
     /// </summary>
     public TextEditResult EditText(int pageIndex, int objectIndex, string newText)
     {
+        if (EditInstructionsDirectly)
+        {
+            // In the page's own instructions: the new text is added (PDFium adds without disturbing
+            // anything) and the old piece is taken out afterwards, the new one standing in its place.
+            if (string.IsNullOrEmpty(newText))
+            {
+                using (var check = OpenPage(pageIndex)) GetObject(check, objectIndex, Native.PAGEOBJ_TEXT, "text");
+                if (TryEditInstructions(pageIndex, [objectIndex], _ => null)) return TextEditResult.Removed;
+            }
+            else
+            {
+                using var later = OpenPage(pageIndex);
+                var old = GetObject(later, objectIndex, Native.PAGEOBJ_TEXT, "text");
+                float oldSize = 12;
+                Native.FPDFTextObj_GetFontSize(old, &oldSize);
+                uint fr = 0, fg = 0, fb = 0, fa = 255, sr = 0, sg = 0, sb = 0, sa = 255;
+                Native.FPDFPageObj_GetFillColor(old, &fr, &fg, &fb, &fa);
+                bool stroked = Native.FPDFPageObj_GetStrokeColor(old, &sr, &sg, &sb, &sa) != 0;
+                float strokeWidth = 1;
+                bool hasWidth = Native.FPDFPageObj_GetStrokeWidth(old, &strokeWidth) != 0;
+                int mode = Native.FPDFTextObj_GetTextRenderMode(old);
+                Native.FS_MATRIX om;
+                Native.FPDFPageObj_GetMatrix(old, &om);
+
+                bool kept = false;
+                var font = Native.FPDFTextObj_GetFont(old);
+                IntPtr made = font == IntPtr.Zero ? IntPtr.Zero : Native.FPDFPageObj_CreateTextObj(Doc, font, oldSize);
+                if (made != IntPtr.Zero)
+                {
+                    bool set = Native.FPDFText_SetText(made, newText) != 0;
+                    Native.FPDFPageObj_SetMatrix(made, &om);
+                    Native.FPDFPageObj_SetFillColor(made, fr, fg, fb, fa);
+                    Native.FPDFPage_InsertObject(later.Handle, made);
+                    kept = set && ShowsText(later, made, newText);
+                    if (!kept)
+                    {
+                        Native.FPDFPage_RemoveObject(later.Handle, made);
+                        Native.FPDFPageObj_Destroy(made);
+                    }
+                }
+                if (!kept) made = InsertTextObject(later, newText, LookAlikeStyle(FontName(old), oldSize, new PdfColor((byte)fr, (byte)fg, (byte)fb, (byte)fa)), new Affine(om.a, om.b, om.c, om.d, om.e, om.f), out _);
+                // Outlined or unseen text (the text layer of a scan) stays outlined or unseen.
+                if (mode > 0)
+                {
+                    Native.FPDFTextObj_SetTextRenderMode(made, mode);
+                    if (stroked) Native.FPDFPageObj_SetStrokeColor(made, sr, sg, sb, sa);
+                    if (hasWidth) Native.FPDFPageObj_SetStrokeWidth(made, strokeWidth);
+                }
+                later.NewObjects.Add(made);
+                later.RemoveLater(old);
+                later.NewTakeThePlaceOfOld = true;
+                later.Dirty = true;
+                _charsByFont = null;
+                return kept ? TextEditResult.KeptFont : TextEditResult.SubstitutedFont;
+            }
+        }
+
         using var page = OpenPage(pageIndex);
         var obj = GetObject(page, objectIndex, Native.PAGEOBJ_TEXT, "text");
         page.Dirty = page.ChangedExisting = true;
@@ -246,19 +303,21 @@ public sealed unsafe partial class PdfDocument
 
         Native.FPDFPage_RemoveObject(page.Handle, obj);
         Native.FPDFPageObj_Destroy(obj);
-        var style = new TextStyle
-        {
-            Font = fontName.Contains("Courier", StringComparison.OrdinalIgnoreCase) || fontName.Contains("Mono", StringComparison.OrdinalIgnoreCase) ? StandardFont.Courier
-                 : fontName.Contains("Times", StringComparison.OrdinalIgnoreCase) || fontName.Contains("Serif", StringComparison.OrdinalIgnoreCase) && !fontName.Contains("Sans", StringComparison.OrdinalIgnoreCase) ? StandardFont.Times
-                 : StandardFont.Helvetica,
-            Bold = fontName.Contains("Bold", StringComparison.OrdinalIgnoreCase),
-            Italic = fontName.Contains("Italic", StringComparison.OrdinalIgnoreCase) || fontName.Contains("Oblique", StringComparison.OrdinalIgnoreCase),
-            Size = size <= 0 ? 12 : size,
-            Color = new PdfColor((byte)r, (byte)g, (byte)b, (byte)a),
-        };
-        InsertTextObject(page, newText, style, new Affine(m.a, m.b, m.c, m.d, m.e, m.f), out _);
+        InsertTextObject(page, newText, LookAlikeStyle(fontName, size, new PdfColor((byte)r, (byte)g, (byte)b, (byte)a)), new Affine(m.a, m.b, m.c, m.d, m.e, m.f), out _);
         return TextEditResult.SubstitutedFont;
     }
+
+    /// <summary>A standard font that looks most like the named one, at the same size and colour.</summary>
+    private static TextStyle LookAlikeStyle(string fontName, float size, PdfColor colour) => new()
+    {
+        Font = fontName.Contains("Courier", StringComparison.OrdinalIgnoreCase) || fontName.Contains("Mono", StringComparison.OrdinalIgnoreCase) ? StandardFont.Courier
+             : fontName.Contains("Times", StringComparison.OrdinalIgnoreCase) || fontName.Contains("Serif", StringComparison.OrdinalIgnoreCase) && !fontName.Contains("Sans", StringComparison.OrdinalIgnoreCase) ? StandardFont.Times
+             : StandardFont.Helvetica,
+        Bold = fontName.Contains("Bold", StringComparison.OrdinalIgnoreCase),
+        Italic = fontName.Contains("Italic", StringComparison.OrdinalIgnoreCase) || fontName.Contains("Oblique", StringComparison.OrdinalIgnoreCase),
+        Size = size <= 0 ? 12 : size,
+        Color = colour,
+    };
 
     internal static string ReadObjectText(IntPtr textObj, IntPtr textPage)
     {
