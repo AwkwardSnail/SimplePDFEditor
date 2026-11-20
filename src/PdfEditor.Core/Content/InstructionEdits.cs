@@ -61,7 +61,8 @@ internal static class InstructionEdits
     /// the old removed, and the new put where the old stood. When the new items cannot be put
     /// there faithfully they stay where they are (at the end), and the other changes are still made.
     /// </summary>
-    public static byte[]? ApplyAndPlace(PageInstructions page, IReadOnlyList<Change> changes, IReadOnlyList<int> place, int before, Facts facts)
+    /// <param name="spacing">Pieces of text (by item) to show with a letter spacing of their own: added after each letter, in text space.</param>
+    public static byte[]? ApplyAndPlace(PageInstructions page, IReadOnlyList<Change> changes, IReadOnlyList<int> place, int before, Facts facts, IReadOnlyDictionary<int, double>? spacing = null)
     {
         var edits = new List<Edit>();
         foreach (var change in changes)
@@ -69,13 +70,26 @@ internal static class InstructionEdits
             if (EditFor(page, change, facts) is not { } edit) return null;
             edits.Add(edit);
         }
-        if (place.Count > 0 && before >= 0 && before < page.Items.Count && !place.Contains(before) && Placed(page, place, before, facts) is { } placing)
+        var redrawn = new HashSet<int>();
+        if (place.Count > 0 && before >= 0 && before < page.Items.Count && !place.Contains(before) && Placed(page, place, before, facts, spacing) is { } placing)
+        {
             edits.AddRange(placing);
+            redrawn.UnionWith(place);
+        }
+        // Spaced text that stays where it is: the spacing is set just for it, and put back after it.
+        foreach (var (index, value) in spacing ?? new Dictionary<int, double>())
+        {
+            if (redrawn.Contains(index) || index < 0 || index >= page.Items.Count || changes.Any(c => c.Item == index)) continue;
+            var item = page.Items[index];
+            if (item.Kind != ItemKind.Text) continue;
+            edits.Add(new Edit(item.Start, item.Start, Encoding.Latin1.GetBytes($"{Number(value, 4)} Tc ")));
+            edits.Add(new Edit(item.End, item.End, Encoding.Latin1.GetBytes($" {item.State.LetterSpace ?? "0 Tc"} ")));
+        }
         return Applied(page, edits);
     }
 
     /// <summary>The edits that take the given items out where they are and draw them just before another item; null when that cannot be done.</summary>
-    private static List<Edit>? Placed(PageInstructions page, IReadOnlyList<int> place, int before, Facts facts)
+    private static List<Edit>? Placed(PageInstructions page, IReadOnlyList<int> place, int before, Facts facts, IReadOnlyDictionary<int, double>? spacing = null)
     {
         var target = page.Items[before];
         if (target.State.CannotBeRepeated || target.InTextBlock && target.Kind != ItemKind.Text) return null;
@@ -96,7 +110,9 @@ internal static class InstructionEdits
                 var item = page.Items[index];
                 if (Alone(page, item, index, facts) is not { } drawn) return null;
                 if (SettingsFor(item, theirs, space, clip, facts.Bounds(index)) is not { } settings) return null;
-                sb.Append("q ").Append(settings).Append(drawn).Append(" Q ");
+                sb.Append("q ").Append(settings);
+                if (spacing is not null && spacing.TryGetValue(index, out double letters)) sb.Append(Number(letters, 4)).Append(" Tc ");
+                sb.Append(drawn).Append(" Q ");
             }
             return sb.ToString();
         }

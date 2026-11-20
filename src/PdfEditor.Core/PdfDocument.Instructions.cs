@@ -45,15 +45,17 @@ public sealed unsafe partial class PdfDocument
     /// otherwise through PDFium, which then writes the page again.
     /// </summary>
     /// <param name="added">New objects (at the end of the page) to put where the first of the removed ones stood.</param>
-    private void RemoveAndMove(int pageIndex, List<int> remove, List<(int Index, Affine By)> move, List<int> added)
+    /// <param name="spaced">New text to be given a letter spacing, or failing that to be squeezed to the same width.</param>
+    private void RemoveAndMove(int pageIndex, List<int> remove, List<(int Index, Affine By)> move, List<int> added, List<(int Index, double Spacing, double Squeeze)> spaced)
     {
         var gone = remove.ToHashSet();
         var moves = move.Where(m => !gone.Contains(m.Index)).GroupBy(m => m.Index).ToDictionary(g => g.Key, g => g.Last().By);
         bool direct = TryRewriteInstructions(pageIndex, (read, facts) =>
         {
             var changes = gone.Select(i => new InstructionEdits.Change(i, null)).Concat(moves.Select(m => new InstructionEdits.Change(m.Key, m.Value))).ToList();
-            return added.Count > 0 && gone.Count > 0
-                ? InstructionEdits.ApplyAndPlace(read, changes, added, gone.Min(), facts)
+            bool place = added.Count > 0 && gone.Count > 0;
+            return place || spaced.Count > 0
+                ? InstructionEdits.ApplyAndPlace(read, changes, place ? added : [], place ? gone.Min() : -1, facts, spaced.ToDictionary(s => s.Index, s => s.Spacing))
                 : InstructionEdits.Apply(read, changes, facts);
         });
         if (direct) return;
@@ -62,6 +64,16 @@ public sealed unsafe partial class PdfDocument
         // Look every object up before removing any: removing one shifts the indices after it.
         var toRemove = gone.Select(i => GetObject(page, i)).ToList();
         var toMove = moves.Select(m => (Obj: GetObject(page, m.Key), m.Value)).ToList();
+        // PDFium writes no letter spacing: the new text is made as wide as it was meant to be instead.
+        foreach (var (index, _, squeeze) in spaced)
+        {
+            var obj = GetObject(page, index);
+            Native.FS_MATRIX m;
+            if (Native.FPDFPageObj_GetMatrix(obj, &m) == 0) continue;
+            m.a = (float)(m.a * squeeze);
+            m.b = (float)(m.b * squeeze);
+            Native.FPDFPageObj_SetMatrix(obj, &m);
+        }
         foreach (var (obj, by) in toMove) TransformObject(obj, by);
         foreach (var obj in toRemove)
         {

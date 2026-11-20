@@ -665,4 +665,43 @@ public unsafe class PageInstructionsTests
         Assert.InRange(runs[2].Bounds.Height / places[2].Bounds.Height, 1.2, 1.5);  // a third bigger
         Assert.Contains("0 1 1 0 k", PdfDocumentTests.Unpacked(saved));              // the CMYK square is as it was written
     }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void A_rewritten_paragraph_keeps_the_letter_spacing_it_was_set_with(bool direct)
+    {
+        // Three lines of 8 pt Courier with every letter 0.4 pt closer than the font sets it:
+        // 39 letters take 171.6 pt, not the font's own 187.2 pt.
+        byte[] bytes = TextPage("BT /F1 8 Tf -0.4 Tc 1 0 0 1 20 200 Tm (The quick brown fox jumps over the lazy) Tj 1 0 0 1 20 190 Tm (extraordinary dog and then it runs off.) Tj 1 0 0 1 20 180 Tm (Then it sleeps.) Tj ET");
+        bool was = PdfDocument.EditInstructionsDirectly;
+        PdfDocument.EditInstructionsDirectly = direct;
+        try
+        {
+            using var doc = PdfDocument.Open(bytes);
+            var paragraph = Assert.Single(doc.GetParagraphs(0));
+            Assert.Equal("The quick brown fox jumps over the lazy extraordinary dog and then it runs off. Then it sleeps.", paragraph.Text);
+            Assert.Equal(171.6, paragraph.Bounds.Width, 1.5);
+
+            var result = doc.ReplaceParagraphText(0, paragraph.Index, paragraph.Text.Replace("quick", "swift"));
+            Assert.Equal(3, result.LineCount);
+            Assert.Equal(0, result.HeightChange, 0.001);
+
+            using var saved = PdfDocument.Open(doc.ToBytes());
+            var now = Assert.Single(saved.GetParagraphs(0));
+            Assert.Equal(paragraph.Text.Replace("quick", "swift"), now.Text); // every space still reads as one
+            Assert.Equal(paragraph.Bounds.Width, now.Bounds.Width, 1.5);       // as wide as it was, not the font's own width
+            var lazy = saved.GetTextRuns(0).Single(r => r.Text.Trim() == "lazy");
+            var first = saved.GetTextRuns(0).First(r => r.Text.Trim() == "The");
+            Assert.Equal(first.Bounds.Bottom, lazy.Bounds.Bottom, 3.0);        // still on the first line
+            Assert.Equal(4 * 4.4, lazy.Bounds.Width, 1.2);                     // its letters as close as before (17.6 pt, not 19.2)
+
+            // And it can be rewritten again, to the same effect.
+            var again = saved.ReplaceParagraphText(0, now.Index, now.Text.Replace("swift", "quick"));
+            Assert.Equal(3, again.LineCount);
+            using var twice = PdfDocument.Open(saved.ToBytes());
+            Assert.Equal(paragraph.Text, Assert.Single(twice.GetParagraphs(0)).Text);
+        }
+        finally { PdfDocument.EditInstructionsDirectly = was; }
+    }
 }

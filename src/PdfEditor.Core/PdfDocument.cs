@@ -334,6 +334,18 @@ public sealed unsafe partial class PdfDocument : IDisposable
         /// </summary>
         public bool NewTakeThePlaceOfOld { get; set; }
 
+        // New text whose letters are to stand closer together or further apart than its font sets them.
+        private Dictionary<IntPtr, (double Spacing, double Squeeze)>? _letterSpacing;
+
+        /// <summary>
+        /// Gives a new piece of text the letter spacing of the text around it. PDFium cannot write
+        /// that, so it is added to the piece's instructions once the page is closed (see
+        /// <see cref="RemoveLater"/>). Where that cannot be done, the piece is made narrower or wider
+        /// by <paramref name="squeeze"/> instead, so that it still takes the room it was given.
+        /// </summary>
+        /// <param name="spacing">Added after every letter, in the units of the piece's own text space.</param>
+        public void SpaceLetters(IntPtr obj, double spacing, double squeeze) => (_letterSpacing ??= [])[obj] = (spacing, squeeze);
+
         public PageHandle(IntPtr handle, PdfDocument owner, int pageIndex)
         {
             Handle = handle;
@@ -361,6 +373,7 @@ public sealed unsafe partial class PdfDocument : IDisposable
             List<int>? remove = null;
             List<(int Index, Affine By)>? move = null;
             List<int> added = [];
+            List<(int Index, double Spacing, double Squeeze)> spaced = [];
             if (_removeLater is not null || _moveLater is not null)
             {
                 var indexOf = new Dictionary<IntPtr, int>();
@@ -369,6 +382,7 @@ public sealed unsafe partial class PdfDocument : IDisposable
                 remove = (_removeLater ?? []).Where(indexOf.ContainsKey).Select(o => indexOf[o]).Distinct().ToList();
                 move = (_moveLater ?? []).Where(m => indexOf.ContainsKey(m.Obj)).Select(m => (indexOf[m.Obj], m.By)).ToList();
                 if (NewTakeThePlaceOfOld) added = NewObjects.Where(indexOf.ContainsKey).Select(o => indexOf[o]).OrderBy(i => i).ToList();
+                if (_letterSpacing is not null) spaced = _letterSpacing.Where(s => indexOf.ContainsKey(s.Key)).Select(s => (indexOf[s.Key], s.Value.Spacing, s.Value.Squeeze)).ToList();
             }
             if (Dirty)
             {
@@ -377,7 +391,7 @@ public sealed unsafe partial class PdfDocument : IDisposable
             }
             Native.FPDF_ClosePage(Handle);
             _owner._openPages--;
-            if (remove is not null && (remove.Count > 0 || move!.Count > 0)) _owner.RemoveAndMove(_pageIndex, remove, move!, added);
+            if (remove is not null && (remove.Count > 0 || move!.Count > 0)) _owner.RemoveAndMove(_pageIndex, remove, move!, added, spaced);
         }
     }
 }

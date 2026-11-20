@@ -461,6 +461,28 @@ public sealed unsafe partial class PdfDocument
             if (!standIns.ContainsKey(c.Style)) standIns[c.Style] = StandardLookAlike(c.Style);
         coverage.Check(missing.Select(c => (standIns[c.Style], c.Ch)));
 
+        // The paragraph's letter spacing: how much closer together, or further apart, its letters stand
+        // than their font sets them (a share of the type size). Publishers often tighten type a little;
+        // text laid out again without that would be wider than the text around it and wrap sooner.
+        double tracking = 0;
+        {
+            var gaps = new List<double>();
+            foreach (var l in p.Lines)
+                for (int i = 1; i < l.Glyphs.Count; i++)
+                {
+                    var a = l.Glyphs[i - 1];
+                    var g = l.Glyphs[i];
+                    if (g.Index != a.Index + 1 || g.SpaceBefore || char.IsWhiteSpace(a.Ch) || char.IsWhiteSpace(g.Ch) || !ReferenceEquals(a.Style, g.Style) || a.Style.Em <= 0) continue;
+                    gaps.Add((g.X - a.End) / a.Style.Em);
+                }
+            if (gaps.Count >= 8)
+            {
+                gaps.Sort();
+                double middle = gaps[gaps.Count / 2];
+                if (Math.Abs(middle) >= 0.003 && Math.Abs(middle) <= 0.15) tracking = middle;
+            }
+        }
+
         bool substituted = false;
         var items = new List<Item>(chars.Count);
         foreach (var c in chars)
@@ -476,13 +498,15 @@ public sealed unsafe partial class PdfDocument
                     style = system ?? style;
                 }
             }
-            items.Add(new Item(c.Ch, style, c.Rise, c.Ch == '\n' ? 0 : style.Advance(c.Ch)));
+            items.Add(new Item(c.Ch, style, c.Rise, c.Ch == '\n' ? 0 : style.Advance(c.Ch) + tracking * style.Em));
         }
 
         // 2. Wrap the words into the paragraph's box.
         double boxLeft = p.BoxLeft, boxRight = p.BoxRight;
         double indent = alignment is TextAlignment.Left or TextAlignment.Justify && p.Alignment is TextAlignment.Left or TextAlignment.Justify ? p.FirstIndent : 0;
         double width = boxRight - boxLeft;
+        coverage.Check(items.Select(it => (it.Style, ' ')).Distinct());
+        var ownStyles = chars.Select(c => c.Style).ToHashSet(); // not the stand-ins: a borrowed font's space may not read back as one
         var words = ToWords(items);
         if (p.Hanging && indent < 0 && words.Count > 1)
             words[1].SpaceBefore = Math.Max(words[1].SpaceBefore, -indent - words[0].Width); // keep the text after a list marker lined up
@@ -491,7 +515,7 @@ public sealed unsafe partial class PdfDocument
         // So words may run that much past the width when wrapping, and are drawn closer together to fit.
         double tight = 0;
         if (alignment is TextAlignment.Left or TextAlignment.Justify && p.Alignment is TextAlignment.Left or TextAlignment.Justify)
-            tight = Math.Clamp(p.Lines.Max(l => -PageAnalysis.StretchOf(l, false)), 0, 0.04 * width);
+            tight = Math.Clamp(p.Lines.Max(l => -PageAnalysis.StretchOf(l, false) - tracking * l.Glyphs.Sum(g => g.Style.Em)), 0, 0.04 * width);
         var lines = items.Count == 0 ? [] : Wrap(words, width + tight, indent);
         lines.RemoveAll(l => l.Words.Count == 0 && !l.EndsWithHardBreak && lines.Count > 1);
 
@@ -613,6 +637,22 @@ public sealed unsafe partial class PdfDocument
             var obj = DrawText(page, text, style, x, y, insertAt < 0 ? null : insertAt++);
             created.Add(obj);
             page.NewObjects.Add(obj);
+            double natural = text.Sum(ch => style.Advance(ch));
+            Native.FS_MATRIX m;
+            if (tracking != 0 && text.Length > 1 && natural > 0 && Native.FPDFPageObj_GetMatrix(obj, &m) != 0)
+            {
+                // The spacing is wanted as seen; the instruction takes it in the text's own space.
+                var u = page.UserToView;
+                double seen = Math.Sqrt(Math.Pow(m.a * u.A + m.b * u.C, 2) + Math.Pow(m.a * u.B + m.b * u.D, 2));
+                double squeeze = (natural + tracking * style.Em * text.Length) / natural;
+                if (later && seen > 1e-9) page.SpaceLetters(obj, tracking * style.Em / seen, squeeze);
+                else
+                {
+                    m.a = (float)(m.a * squeeze);
+                    m.b = (float)(m.b * squeeze);
+                    Native.FPDFPageObj_SetMatrix(obj, &m);
+                }
+            }
             return obj;
         }
         double newBottom = 0, minX = double.MaxValue, maxX = double.MinValue;
@@ -630,7 +670,10 @@ public sealed unsafe partial class PdfDocument
                     int end = k;
                     while (end < word.Items.Count && ReferenceEquals(word.Items[end].Style, word.Items[k].Style) && word.Items[end].Rise == word.Items[k].Rise) end++;
                     var segment = word.Items.GetRange(k, end - k);
-                    Draw(new string(segment.Select(s => s.Ch).ToArray()), segment[0].Style, x, line.Baseline + segment[0].Rise);
+                    string shown = new(segment.Select(s => s.Ch).ToArray());
+                    // A real space after each word but the last: a narrow gap alone is not always read as one.
+                    if (end == word.Items.Count && w < line.Words.Count - 1 && ownStyles.Contains(segment[0].Style) && coverage.Has(segment[0].Style, ' ')) shown += " ";
+                    Draw(shown, segment[0].Style, x, line.Baseline + segment[0].Rise);
                     x += segment.Sum(s => s.Advance);
                     k = end;
                 }
