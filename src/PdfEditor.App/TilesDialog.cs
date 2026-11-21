@@ -76,7 +76,7 @@ internal static class TilesDialog
         var overlap = new TextBox { Width = 50, Text = "10" };
         var margin = new TextBox { Width = 50, Text = "5" };
         var marks = new CheckBox { Content = "Cut marks and sheet numbers in the margins", IsChecked = true, Margin = new Thickness(0, 4, 0, 0) };
-        var summary = new TextBlock { TextWrapping = TextWrapping.Wrap, Width = 320, Margin = new Thickness(0, 12, 0, 0), MinHeight = 52 };
+        var summary = new TextBlock { TextWrapping = TextWrapping.Wrap, Width = 372, Margin = new Thickness(0, 12, 0, 0), MinHeight = 52 };
         var ok = new Button { Content = "Save tiles", Width = 90, Margin = new Thickness(0, 0, 8, 0), IsDefault = true };
         var cancel = new Button { Content = "Cancel", Width = 80, IsCancel = true };
 
@@ -390,7 +390,7 @@ internal static class TilesDialog
         foreach (var box in new[] { across, down, percent, manualPercent, overlap, margin }) box.TextChanged += (_, _) => Update();
         marks.Click += (_, _) => Update();
 
-        var panel = new StackPanel { Margin = new Thickness(14), Width = 320 };
+        var panel = new StackPanel { Margin = new Thickness(14), Width = 372 }; // wide enough for its longest line at the larger letters
         TextBlock Heading(string text) => new() { Text = text, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 10, 0, 6) };
         StackPanel Row(params UIElement[] items)
         {
