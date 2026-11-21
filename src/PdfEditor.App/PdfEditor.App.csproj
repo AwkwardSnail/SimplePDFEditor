@@ -26,7 +26,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\PdfEditor.Core\PdfEditor.Core.csproj" />
+    <!-- The PDF engine lives in its own repository and is a git submodule here: clone with recurse-submodules, or fetch it afterwards with git submodule update and its init option. -->
+    <ProjectReference Include="..\..\engine\src\PdfEditor.Core\PdfEditor.Core.csproj" />
   </ItemGroup>
 
 </Project>
