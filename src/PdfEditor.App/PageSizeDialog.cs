@@ -22,7 +22,7 @@ internal static class PageSizeDialog
 
     private static readonly (string Name, double Width, double Height)[] Standard =
     [
-        ("A0", 841, 1189), ("A1", 594, 841), ("A2", 420, 594), ("A3", 297, 420), ("A4", 210, 297), ("A5", 148, 210),
+        ("A0", 841, 1189), ("A1", 594, 841), ("A2", 420, 594), ("A3", 297, 420), ("A4", 210, 297), ("A5", 148, 210), ("A6", 105, 148),
         ("Letter", 215.9, 279.4), ("Legal", 215.9, 355.6),
     ];
 

@@ -135,7 +135,7 @@ The view scrolls on from page to page: the page being worked on has the page bef
 
 **Page list**: right-click a page in the list on the left to rotate it right or left, resize it or delete it. **Resize page** asks for the new size and whether what is on the page is made larger or smaller to fit (it keeps its shape and sits in the middle); without that, everything stays the size it is and keeps its place from the top-left corner. Scaling is written in front of the page's content, so nothing on the page is rewritten.
 
-**Add page** asks for the new page's size: the same as the current page, A0 to A5, Letter, Legal or any size in millimetres, portrait or landscape. The size can be kept for every new page; hold Shift while choosing Add page to be asked again. The kept size is stored in a small file on this computer only.
+**Add page** asks for the new page's size: the same as the current page, A0 to A6, Letter, Legal or any size in millimetres, portrait or landscape. The size can be kept for every new page; hold Shift while choosing Add page to be asked again. The kept size is stored in a small file on this computer only.
 
 **Find & replace** (Ctrl+H) replaces text throughout the document and re-flows each paragraph it changes.
 
