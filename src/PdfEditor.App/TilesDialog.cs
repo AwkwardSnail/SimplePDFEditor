@@ -22,7 +22,7 @@ internal static class TilesDialog
 
     private static readonly (string Name, double Width, double Height)[] Papers =
     [
-        ("A4", 210, 297), ("A3", 297, 420), ("A5", 148, 210), ("Letter", 215.9, 279.4), ("Legal", 215.9, 355.6),
+        ("A3", 297, 420), ("A4", 210, 297), ("A5", 148, 210), ("A6", 105, 148), ("Letter", 215.9, 279.4), ("Legal", 215.9, 355.6),
     ];
 
     /// <summary>
@@ -56,7 +56,7 @@ internal static class TilesDialog
 
         var paper = new ComboBox { Width = 190 };
         foreach (var (name, w, h) in Papers) paper.Items.Add($"{name}  ({Format(w)} × {Format(h)} mm)");
-        paper.SelectedIndex = 0;
+        paper.SelectedIndex = Math.Max(0, Array.FindIndex(Papers, p => p.Name == "A4")); // the paper most printers hold
         var portrait = new RadioButton { Content = "Portrait", GroupName = "TilePaper", IsChecked = true, Margin = new Thickness(0, 0, 14, 0) };
         var landscape = new RadioButton { Content = "Landscape", GroupName = "TilePaper" };
 
