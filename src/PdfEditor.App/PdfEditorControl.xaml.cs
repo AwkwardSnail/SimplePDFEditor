@@ -983,6 +983,9 @@ public partial class PdfEditorControl : UserControl
         Select(hit);
         if (hit is null)
         {
+            // Between two words or two lines of a paragraph there is nothing to pick, but a double-click
+            // there still means the paragraph.
+            if (clickCount >= 2 && BeginEditingParagraph(p)) return;
             // On empty paper: drag out a box to select the lines of text it touches.
             StartDrag(Drag.Band, p, new PdfRect(p.X, p.Y, 0, 0));
             return;
