@@ -10,6 +10,8 @@
     <AssemblyName>SimplePDFEditor</AssemblyName>
     <!-- The aWkward sn@ail icon, made by packaging\generate-icons.ps1. -->
     <ApplicationIcon>app.ico</ApplicationIcon>
+    <!-- Runs as the user, and is sharp at each screen's own scaling (see app.manifest). -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <!-- Lets the project compile on non-Windows build machines; it still only runs on Windows. -->
     <EnableWindowsTargeting>true</EnableWindowsTargeting>

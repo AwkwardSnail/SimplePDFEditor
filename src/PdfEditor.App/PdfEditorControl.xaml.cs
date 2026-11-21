@@ -192,6 +192,13 @@ public partial class PdfEditorControl : UserControl
 
     private void OnSessionChanged(object? sender, EventArgs e) => RefreshAll();
 
+    /// <summary>Moved to a screen with another scaling: the pages are drawn again at that screen's sharpness.</summary>
+    protected override void OnDpiChanged(DpiScale oldDpi, DpiScale newDpi)
+    {
+        base.OnDpiChanged(oldDpi, newDpi);
+        if (IsLoaded && Math.Abs(oldDpi.PixelsPerDip - newDpi.PixelsPerDip) > 0.001) RefreshAll(thumbnails: true, hold: true);
+    }
+
     /// <summary>Runs an edit as one undo step and reports any failure to the user.</summary>
     private bool Edit(Action<PdfDocument> edit)
     {
