@@ -2,6 +2,8 @@
 
 A PDF editor for Windows by [Awkward Snail](https://awkwardsnail.com.au): add and rearrange pages, edit and add text and pictures, draw shapes, highlight and comment, and save a copy as RTF for a word processor. It works offline, collects no data and never goes online.
 
+**Get it from the [Microsoft Store](https://apps.microsoft.com/detail/9P11J3R4HXNP)** (A$4.05, one-time). Building it yourself from this source is free.
+
 ## Layout
 
 - `src/PdfEditor.App` - the Windows desktop editor (WPF). The whole editor lives in `PdfEditorControl`, so it can be dropped into another WPF window; `MainWindow` is a thin shell around it.
